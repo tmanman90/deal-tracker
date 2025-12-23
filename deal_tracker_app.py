@@ -43,7 +43,7 @@ st.markdown("""
     }
 
     /* TYPOGRAPHY */
-    h1, h2, h3, h4, h5, h6, p, div, span, label {
+    h1, h2, h3, h4, h5, h6, p, div, span, label, li, a {
         font-family: 'Courier New', Courier, monospace !important;
         text-shadow: 0 0 2px #33ff00aa;
     }
@@ -165,6 +165,31 @@ st.markdown("""
     .deal-val-red { color: #ff3333; font-weight: bold; font-size: 1.1rem; }
     .deal-val-amber { color: #ffbf00; font-weight: bold; font-size: 1.1rem; }
     .deal-title { font-size: 1.3rem; font-weight: bold; color: #e6ffff; text-transform: uppercase; }
+
+    /* DEBUG BOX STYLING */
+    .debug-container {
+        border: 1px dashed #555;
+        padding: 10px;
+        margin-top: 20px;
+        background-color: #000;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 0.9rem;
+        color: #ccc;
+    }
+    .debug-title {
+        color: #ffbf00;
+        font-weight: bold;
+        margin-bottom: 5px;
+        border-bottom: 1px dashed #555;
+        display: block;
+    }
+    .debug-row {
+        display: flex;
+        justify_content: space-between;
+        margin-bottom: 2px;
+    }
+    .debug-key { color: #888; }
+    .debug-val { color: #e6ffff; }
     
 </style>
 """, unsafe_allow_html=True)
@@ -965,10 +990,10 @@ def show_detail(df_dash, df_act, deal_id):
             
             st.markdown(f"""
             <div class="diagnostic-box">
-                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
+                <div class="debug-row"><span class="debug-key">DEAL AGE:</span> <span class="debug-val">{elapsed:.1f} MONTHS</span></div>
+                <div class="debug-row"><span class="debug-key">FORECASTED RECOUPMENT:</span> <span class="debug-val">{expected_recoup_pct:.1f}%</span></div>
+                <div class="debug-row"><span class="debug-key">ACTUAL RECOUPMENT:</span> <span class="debug-val">{recoup_pct:.1f}%</span></div>
+                <div class="debug-row"><span class="debug-key">PACE RATIO:</span> <span class="debug-val">{pace_ratio:.2f}x</span></div>
                 {artist_type_line}
                 {legacy_flag}
             </div>
@@ -1084,12 +1109,18 @@ def show_detail(df_dash, df_act, deal_id):
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
         
     st.markdown("---")
-    with st.expander("🕵️ DEAL DETECTIVE (DEBUG)"):
-        st.write(f"**Forecast Start Date (Smart):** {deal_row.get('Forecast Start Date')}")
-        st.write(f"**Elapsed Months (Raw):** {deal_row.get('Elapsed Months')}")
-        st.write(f"**Effective Months (Mulligan):** {max(0, deal_row.get('Elapsed Months',0) - 0.5)}")
-        st.write(f"**Pace Ratio:** {deal_row.get('Pace Ratio')}")
-        st.write(f"**Target Amount:** {deal_row.get('Target Amount')}")
+    
+    # Custom HTML for Debug Table
+    st.markdown(f"""
+    <div class="debug-container">
+        <span class="debug-title">🕵️ DEAL DETECTIVE (DEBUG)</span>
+        <div class="debug-row"><span class="debug-key">Forecast Start Date (Smart):</span> <span class="debug-val">{deal_row.get('Forecast Start Date')}</span></div>
+        <div class="debug-row"><span class="debug-key">Elapsed Months (Raw):</span> <span class="debug-val">{deal_row.get('Elapsed Months')}</span></div>
+        <div class="debug-row"><span class="debug-key">Effective Months (Mulligan):</span> <span class="debug-val">{max(0, deal_row.get('Elapsed Months',0) - 0.5)}</span></div>
+        <div class="debug-row"><span class="debug-key">Pace Ratio:</span> <span class="debug-val">{deal_row.get('Pace Ratio')}</span></div>
+        <div class="debug-row"><span class="debug-key">Target Amount:</span> <span class="debug-val">{deal_row.get('Target Amount')}</span></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
