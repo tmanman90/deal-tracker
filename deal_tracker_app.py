@@ -361,15 +361,19 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     
     elapsed_months = max(1.0, elapsed_months)
     
-    # --- RAMP-UP CURVE LOGIC (STRICTER) ---
+    # --- RAMP-UP CURVE LOGIC (STRICTER v3) ---
+    # Month 3+ expects full linear velocity (1.0 factor).
+    # Month 2 expects 90% velocity.
+    # Month 1 keeps 60% handicap.
+    
     linear_progress = elapsed_months / target_months
     
     if elapsed_months <= 1.5:
         curve_factor = 0.6 # M1: Lenient
     elif elapsed_months <= 2.5:
-        curve_factor = 0.9 # M2: Significantly tighter (90% of linear)
+        curve_factor = 0.9 # M2: Tightened (90% of linear)
     else:
-        curve_factor = 1.0 # M3+: No handicap (100% linear velocity expected)
+        curve_factor = 1.0 # M3+: No handicap (Full speed)
         
     expected_progress = linear_progress * curve_factor
     expected_progress = min(1.0, expected_progress)
@@ -390,12 +394,20 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # --- GRADING BANDS (STRICTER) ---
+    # --- GRADING BANDS (STRICTER v2) ---
+    # A+: >= 1.15
+    # A: >= 1.00
+    # B+: >= 0.95
+    # B: >= 0.85
+    # C: >= 0.70
+    # D: >= 0.50
+    # F: < 0.50
+    
     if pace_ratio >= 1.15: grade = "A+"
     elif pace_ratio >= 1.00: grade = "A"
     elif pace_ratio >= 0.95: grade = "B+"
     elif pace_ratio >= 0.85: grade = "B"
-    elif pace_ratio >= 0.70: grade = "C" # At Risk
+    elif pace_ratio >= 0.70: grade = "C"
     elif pace_ratio >= 0.50: grade = "D"
     else: grade = "F"
         
@@ -715,7 +727,7 @@ def show_portfolio(df_dash, df_act):
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         
-        # Updated grade color logic
+        # Updated grade color logic (Stricter)
         if grade in ["A+", "A", "B+"]:
             grade_color = "#33ff00" # Green
         elif grade == "B":
@@ -884,7 +896,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
