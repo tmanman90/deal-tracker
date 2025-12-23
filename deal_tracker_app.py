@@ -216,11 +216,19 @@ def load_data():
         ws_act = sh.worksheet("ACTUALS")
         df_act = safe_read_sheet(ws_act)
         
-        return df_dash, df_act
+        # 3. READ DEALS (For Analyzer Data)
+        # We need to merge this info in because DASHBOARD might not have all columns yet
+        try:
+            ws_deals = sh.worksheet("DEALS")
+            df_deals = safe_read_sheet(ws_deals)
+        except:
+            df_deals = pd.DataFrame() # Fallback if sheet missing
+        
+        return df_dash, df_act, df_deals
         
     except Exception as e:
         st.error(f"SYSTEM FAILURE: Connection Refused. {str(e)}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # -----------------------------------------------------------------------------
 # CLEANING & LOGIC UTILS
@@ -279,28 +287,61 @@ def parse_flexible_date(date_str):
     # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
 
-def calculate_pace_metrics(row, count):
+def calculate_pace_metrics(row, count, deal_meta=None):
     """
     Calculates Grade and Pace based on Benchmark.
     Includes 'Ramp-up Curve' for first 4 months.
-    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress).
+    Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
+    
+    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag).
     """
     # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
-        return "N/A", 0.0, False, 0, 0.0
+        return "N/A", 0.0, False, 0, 0.0, False
     
-    # 2. Parse Dates
+    # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
+    # Check if we have analyzer data. 
+    # We look for 'Selected Advance' or 'Selected Strategy'.
+    
+    target_amount = 0.0
+    target_months = 12.0 # Default
+    is_legacy = False
+    
+    strat = str(row.get('Selected Strategy', '')).strip()
+    sel_adv = row.get('Selected Advance', '')
+    
+    # If strategy is missing OR Selected Advance is missing/empty/zero, assume Legacy
+    # Note: Sometimes 'Selected Advance' exists but is blank in CSV
+    if not strat or pd.isna(sel_adv) or str(sel_adv).strip() == "":
+        # LEGACY MODE
+        is_legacy = True
+        # Use Executed Advance as the target
+        target_amount = clean_currency(row.get('Executed Advance', 0))
+        target_months = 12.0
+    else:
+        # ANALYZER MODE
+        is_legacy = False
+        target_amount = clean_currency(sel_adv)
+        # Use Label Breakeven Months if available, else 12
+        lbm = row.get('Label Breakeven Months', 12)
+        try:
+            target_months = float(lbm)
+            if target_months <= 0: target_months = 12.0
+        except:
+            target_months = 12.0
+
+    # 3. Parse Dates
     try:
         if 'Forecast Start Date' not in row:
-             return "N/A", 0.0, False, 0, 0.0
+             return "N/A", 0.0, False, 0, 0.0, False
              
         forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
-            return "N/A", 0.0, False, 0, 0.0
+            return "N/A", 0.0, False, 0, 0.0, False
     except:
-        return "N/A", 0.0, False, 0, 0.0
+        return "N/A", 0.0, False, 0, 0.0, False
         
-    # 3. Calculate Elapsed Months vs Benchmark
+    # 4. Calculate Elapsed Months vs Benchmark
     today = pd.Timestamp.now()
     if forecast_start > today:
         elapsed_months = 0 
@@ -310,28 +351,24 @@ def calculate_pace_metrics(row, count):
     elapsed_months = max(0.1, elapsed_months)
     
     # --- RAMP-UP CURVE LOGIC (TIGHTENED v2) ---
-    # Denominators: 20 (M1), 18 (M2), 14 (M3), 12 (M4 - Full Speed)
-    # This ramps up to full speed (12) by Month 4 as requested.
+    linear_progress = elapsed_months / target_months
     
     if elapsed_months <= 1.5:
-        # Month 1: Expect 1/20th pace
-        expected_progress = elapsed_months / 20.0
+        curve_factor = 0.6 # M1: 1/20 vs 1/12
     elif elapsed_months <= 2.5:
-        # Month 2: Expect 2/18th pace
-        expected_progress = elapsed_months / 18.0
+        curve_factor = 0.66 # M2: 2/18 vs 2/12
     elif elapsed_months <= 3.5:
-        # Month 3: Expect 3/14th pace
-        expected_progress = elapsed_months / 14.0
+        curve_factor = 0.85 # M3: 3/14 vs 3/12
     else:
-        # Month 4+: Standard linear expectation (x/12) - Full Speed
-        expected_progress = elapsed_months / 12.0
-
-    # Cap expectation at 1.0 (100%)
+        curve_factor = 1.0 # M4+: Full speed
+        
+    expected_progress = linear_progress * curve_factor
     expected_progress = min(1.0, expected_progress)
     
-    # Actual progress
-    if '% to BE' in row:
-        actual_progress = clean_percent(row['% to BE'])
+    # 5. Actual progress
+    cum_receipts = clean_currency(row.get('Cum Receipts', 0))
+    if target_amount > 0:
+        actual_progress = cum_receipts / target_amount
     else:
         actual_progress = 0.0
     
@@ -342,41 +379,50 @@ def calculate_pace_metrics(row, count):
         pace_ratio = actual_progress / expected_progress
         
     # --- GRADING BANDS ---
-    # A+: >= 1.10
-    # A:  >= 1.00
-    # B+: >= 0.90
-    # B:  >= 0.80
-    # C+: >= 0.70
-    # C:  >= 0.60
-    # D:  >= 0.50
-    # F:  < 0.50
-    
-    if pace_ratio >= 1.10:
-        grade = "A+"
-    elif pace_ratio >= 1.00:
-        grade = "A"
-    elif pace_ratio >= 0.90:
-        grade = "B+"
-    elif pace_ratio >= 0.80:
-        grade = "B"
-    elif pace_ratio >= 0.70:
-        grade = "C+"
-    elif pace_ratio >= 0.60:
-        grade = "C"
-    elif pace_ratio >= 0.50:
-        grade = "D"
-    else:
-        grade = "F"
+    if pace_ratio >= 1.10: grade = "A+"
+    elif pace_ratio >= 1.00: grade = "A"
+    elif pace_ratio >= 0.90: grade = "B+"
+    elif pace_ratio >= 0.80: grade = "B"
+    elif pace_ratio >= 0.70: grade = "C+"
+    elif pace_ratio >= 0.60: grade = "C"
+    elif pace_ratio >= 0.50: grade = "D"
+    else: grade = "F"
         
-    return grade, pace_ratio, True, elapsed_months, expected_progress
+    return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy
 
 # -----------------------------------------------------------------------------
 # DATA PROCESSING WRAPPER
 # -----------------------------------------------------------------------------
-def process_data(df_dash, df_act):
+def process_data(df_dash, df_act, df_deals):
     # Ensure required columns exist
-    if df_dash.empty or df_act.empty:
+    if df_dash.empty:
         return df_dash, df_act
+
+    # MERGE DEALS DATA INTO DASHBOARD IF AVAILABLE
+    if not df_deals.empty:
+        # Normalize IDs for merge
+        # Be careful with column names, sometimes 'Deal ID' has whitespace
+        if 'Deal ID' in df_dash.columns:
+            df_dash['Deal ID Str'] = df_dash['Deal ID'].astype(str).str.strip()
+        
+        if 'Deal ID' in df_deals.columns:
+            df_deals['Deal ID Str'] = df_deals['Deal ID'].astype(str).str.strip()
+            
+            # Columns to bring over
+            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months']
+            cols_existing = [c for c in cols_to_merge if c in df_deals.columns]
+            
+            if cols_existing and 'Deal ID Str' in df_dash.columns:
+                # Merge
+                df_merged = df_dash.merge(df_deals[['Deal ID Str'] + cols_existing], on='Deal ID Str', how='left', suffixes=('', '_y'))
+                
+                # Cleanup
+                for c in cols_existing:
+                    if f'{c}_y' in df_merged.columns:
+                        df_merged[c] = df_merged[f'{c}_y'].fillna(df_merged[c])
+                        df_merged.drop(columns=[f'{c}_y'], inplace=True)
+                
+                df_dash = df_merged
 
     # 1. GLOBAL STRIP: Clean Deal IDs
     if 'Deal ID' in df_act.columns:
@@ -414,7 +460,8 @@ def process_data(df_dash, df_act):
     is_eligible = []
     elapsed_list = []
     data_points_list = []
-    expected_list = [] # Store expected progress
+    expected_list = []
+    legacy_list = []
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -422,8 +469,8 @@ def process_data(df_dash, df_act):
         # Get count (default 0)
         count = eligibility_map.get(did, 0)
         
-        # Now returns 5 values including exp_prog
-        g, r, e, el_m, exp_prog = calculate_pace_metrics(row, count)
+        # Now returns 6 values including is_legacy
+        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count)
         
         grades.append(g)
         ratios.append(r)
@@ -431,19 +478,26 @@ def process_data(df_dash, df_act):
         elapsed_list.append(el_m)
         data_points_list.append(count)
         expected_list.append(exp_prog)
+        legacy_list.append(is_leg)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
     df_dash['Elapsed Months'] = elapsed_list
     df_dash['Data Points Found'] = data_points_list 
-    df_dash['Expected Recoupment'] = expected_list # New Column
+    df_dash['Expected Recoupment'] = expected_list
+    df_dash['Is Legacy'] = legacy_list
     
-    # Clean % to BE for display/sorting
-    if '% to BE' in df_dash.columns:
-        df_dash['% to BE Clean'] = df_dash['% to BE'].apply(clean_percent)
-    else:
-        df_dash['% to BE Clean'] = 0.0
+    # Recalculate '% to BE Clean' based on the specific target used
+    def get_target(r):
+        if r['Is Legacy']:
+            return clean_currency(r.get('Executed Advance', 0))
+        else:
+            sel = clean_currency(r.get('Selected Advance', 0))
+            return sel if sel > 0 else clean_currency(r.get('Executed Advance', 0))
+            
+    df_dash['Target Amount'] = df_dash.apply(get_target, axis=1)
+    df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
     
     return df_dash, df_act
 
@@ -462,11 +516,9 @@ def show_portfolio(df_dash, df_act):
             sorted_deals = df_dash
             
         for _, row in sorted_deals.iterrows():
-            # Robust key access
             artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
             
             symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
-            # Safe access to clean percentage
             pct = row.get('% to BE Clean', 0)
             if pd.isna(pct): pct = 0.0
             
@@ -505,7 +557,6 @@ def show_portfolio(df_dash, df_act):
     
     if search:
         mask = pd.Series([False] * len(filtered))
-        # Handle Artist column name robustly
         if 'Artist / Project' in filtered.columns:
             mask = mask | filtered['Artist / Project'].astype(str).str.lower().str.contains(search)
         elif 'Artist' in filtered.columns:
@@ -531,7 +582,7 @@ def show_portfolio(df_dash, df_act):
         sort_col = "% to BE Clean"
     elif sort_opt == "Grade":
         sort_col = "Grade"
-        ascending = True # A is 'smaller' than B in ascii
+        ascending = True
     elif sort_opt == "Cum Receipts":
         sort_col = "Cum Receipts"
     elif sort_opt == "Delta Months":
@@ -543,7 +594,7 @@ def show_portfolio(df_dash, df_act):
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
-    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5) # Added 5th column
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     
     kpi1.metric("ACTIVE DEALS", len(filtered))
     
@@ -562,11 +613,9 @@ def show_portfolio(df_dash, df_act):
         
     # Weighted Grade Calculation
     if total_adv > 0 and 'Pace Ratio' in filtered.columns and 'Is Eligible' in filtered.columns:
-        # Filter for eligible deals only for grade calculation
         eligible_deals = filtered[filtered['Is Eligible'] == True]
         
         if not eligible_deals.empty:
-            # Weighted Score = Pace Ratio * Advance
             eligible_deals['Weighted Score'] = eligible_deals['Pace Ratio'] * eligible_deals['Executed Advance']
             
             total_eligible_adv = eligible_deals['Executed Advance'].sum()
@@ -575,7 +624,6 @@ def show_portfolio(df_dash, df_act):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                # Convert Ratio to Grade using same logic as per deal
                 if overall_ratio >= 1.10: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
@@ -617,18 +665,15 @@ def show_portfolio(df_dash, df_act):
         did = row.get('Deal ID', 'N/A')
         status = row.get('Status', '-')
         
-        # Grade Color
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         grade_color = "#33ff00" if "A" in grade or "B+" in grade else "#ffbf00" if "B" in grade or "C+" in grade else "#ff3333" if "C" in grade or "D" in grade or "F" in grade else "#888"
         
-        # Pct Color
         pct_val = row.get('% to BE Clean', 0)
         pct_str = f"{pct_val*100:.1f}%"
         
         rem_val = row.get('Remaining to BE', 0)
         rem_str = f"${rem_val:,.0f}" if isinstance(rem_val, (int, float)) else str(rem_val)
         
-        # Row Layout using Columns
         c1, c2, c3, c4, c5, c6, c7 = st.columns([3, 1, 1, 1, 1, 1.5, 1])
         
         with c1:
@@ -656,38 +701,31 @@ def show_portfolio(df_dash, df_act):
     st.markdown("### > MARKET PULSE")
     
     if not df_act.empty and not df_dash.empty:
-        # Prepare Data for Multi-Line Chart
         pulse_data = []
-        
-        # Get list of active deals from dashboard
         active_ids = df_dash['Deal ID'].unique()
         
         for did in active_ids:
             deal_subset = df_act[df_act['Deal ID'] == did].copy()
             if not deal_subset.empty:
-                # Sort by date
                 if 'Period End Date' in deal_subset.columns:
                     deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
                     
-                    # Calculate Normalized Month & Cumulative % Recouped
-                    # We need the Advance amount from df_dash for this Deal ID
+                    # Need Target Amount to calculate % Recouped
                     adv_row = df_dash[df_dash['Deal ID'] == did]
                     if not adv_row.empty:
-                        advance = adv_row.iloc[0]['Executed Advance']
-                        if advance > 0:
+                        target_amt = adv_row.iloc[0].get('Target Amount', 0)
+                        if target_amt > 0:
                             deal_subset['CumNet'] = deal_subset['Net Receipts'].cumsum()
-                            deal_subset['PctRecouped'] = deal_subset['CumNet'] / advance
+                            deal_subset['PctRecouped'] = deal_subset['CumNet'] / target_amt
                             
-                            # Add to master list
                             for i, (idx, row) in enumerate(deal_subset.iterrows()):
-                                # Robust artist name retrieval
                                 artist_label = adv_row.iloc[0].get('Artist / Project', 
                                               adv_row.iloc[0].get('Artist', 
                                               adv_row.iloc[0].get('Project', did)))
                                 
                                 pulse_data.append({
                                     'Deal ID': did,
-                                    'MonthIndex': i + 1, # M1, M2...
+                                    'MonthIndex': i + 1, 
                                     'PctRecouped': row['PctRecouped'],
                                     'Artist': artist_label
                                 })
@@ -695,11 +733,8 @@ def show_portfolio(df_dash, df_act):
         if pulse_data:
             pulse_df = pd.DataFrame(pulse_data)
             
-            # --- UPDATED PULSE CHART (TERMINAL STYLE) ---
-            # Define Neon Color Scheme
             neon_range = ['#39FF14', '#00FFFF', '#FF00FF', '#FFFFFF', '#FFFF00']
             
-            # Base Lines (Sharp points, linear interpolation)
             lines = alt.Chart(pulse_df).mark_line(
                 interpolate='linear', 
                 strokeWidth=2
@@ -716,7 +751,6 @@ def show_portfolio(df_dash, df_act):
                 tooltip=['Artist', 'MonthIndex', alt.Tooltip('PctRecouped', format='.1%')]
             )
             
-            # Glowing Area Fill (Low opacity gradient)
             area = alt.Chart(pulse_df).mark_area(
                 interpolate='linear',
                 opacity=0.1,
@@ -732,17 +766,16 @@ def show_portfolio(df_dash, df_act):
                 color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None)
             )
             
-            # Combine
             pulse_chart = (area + lines).properties(
                 height=300,
                 width='container',
-                background='transparent' # Force transparent background
+                background='transparent'
             ).configure_view(
-                strokeWidth=0,  # No border around chart
-                fill=None # Ensure view fill is none
+                strokeWidth=0,
+                fill=None
             )
             
-            st.altair_chart(pulse_chart, use_container_width=True, theme=None) # Disable Streamlit theme
+            st.altair_chart(pulse_chart, use_container_width=True, theme=None)
         else:
             st.info("No transaction data available for Pulse Chart.")
 
@@ -783,10 +816,14 @@ def show_detail(df_dash, df_act, deal_id):
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
     grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
     status_val = deal_row.get('Status', '-')
-    adv_val = deal_row.get('Executed Advance', 0)
+    
+    # Ensure values are clean
+    adv_val = clean_currency(deal_row.get('Executed Advance', 0))
+    cum_val = clean_currency(deal_row.get('Cum Receipts', 0))
+    rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
+    
+    # NOTE: Header stats use '% to BE Clean' which now reflects Legacy logic automatically
     pct_val = deal_row.get('% to BE Clean', 0) * 100
-    cum_val = deal_row.get('Cum Receipts', 0)
-    rem_val = deal_row.get('Remaining to BE', 0)
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
     start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
@@ -812,23 +849,19 @@ def show_detail(df_dash, df_act, deal_id):
     col_gauge, col_stats = st.columns([1, 2])
     
     with col_gauge:
-        # CHANGED: Now visualizing Actual Recoupment % (0.0 to 1.0) instead of Ratio
         actual_recoup = deal_row.get('% to BE Clean', 0)
         expected_recoup = deal_row.get('Expected Recoupment', 0)
         pace_ratio = deal_row.get('Pace Ratio', 0)
         
-        # Clamp for visualization (0 to 100%)
         chart_val = min(1.0, max(0.0, actual_recoup))
         
-        # Color logic based on grade
         if pace_ratio < 0.70:
-            bar_color = 'red' # F, D, C
+            bar_color = 'red' 
         elif pace_ratio < 0.90:
-            bar_color = 'orange' # C+, B
+            bar_color = 'orange' 
         else:
-            bar_color = '#33ff00' # Neon Green (B+, A, A+)
+            bar_color = '#33ff00' 
             
-        # Add formatted text for the tooltip
         gauge_df = pd.DataFrame({
             'val': [chart_val], 
             'label': ['Recoupment'], 
@@ -837,17 +870,13 @@ def show_detail(df_dash, df_act, deal_id):
             'Forecast': [f"{expected_recoup*100:.1f}%"]
         })
         
-        # Create Bar
         gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
             x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
             color=alt.Color('color', scale=None, legend=None),
             tooltip=['label', 'Recoupment', 'Forecast']
         ).properties(height=80, title="RECOUPMENT METER")
         
-        # Add Benchmark Line (Expected Progress)
-        # Increased size and changed color to make it more visible against dark background
         rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
-        
         st.altair_chart(gauge + rule, use_container_width=True)
         
     with col_stats:
@@ -855,18 +884,22 @@ def show_detail(df_dash, df_act, deal_id):
             elapsed = deal_row.get('Elapsed Months', 0)
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
+            is_legacy = deal_row.get('Is Legacy', False)
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
             else:
                  note = "(Linear)"
-                 
+            
+            legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
+            
             st.markdown(f"""
             <div class="diagnostic-box">
                 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
                 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
+                {legacy_flag}
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -894,12 +927,13 @@ def show_detail(df_dash, df_act, deal_id):
                 deal_act['Rolling3'] = 0
                 deal_act['Net Receipts'] = 0
             
-            # Forecast Data: Linear line from 0 to Advance over 12 months
-            # We map Month 1 to (Adv/12 * 1), Month 2 to (Adv/12 * 2), etc.
-            # Only go up to the max month index available in actuals for comparison
+            # Forecast Data (Linear)
+            # Use 'Target Amount' from deal_row to draw forecast line correctly
+            target_amt = deal_row.get('Target Amount', adv_val) # adv_val is executed advance
+            
             max_month = deal_act['MonthIndex'].max()
             forecast_data = []
-            monthly_forecast = adv_val / 12.0 if adv_val > 0 else 0
+            monthly_forecast = target_amt / 12.0 if target_amt > 0 else 0
             for i in range(1, max_month + 1):
                 forecast_data.append({
                     'MonthIndex': i,
@@ -927,13 +961,9 @@ def show_detail(df_dash, df_act, deal_id):
                     tooltip=['MonthLabel', 'DateStr', 'CumNet']
                 )
                 
-                # Forecast Line (if we have data)
+                # Forecast Line
                 if not df_forecast.empty:
-                    # We need to map MonthIndex back to MonthLabel for the X axis to match
-                    # Create a simple lookup or just use MonthIndex if we switch X axis type
-                    # Easiest way: merge forecast data with month labels
                     df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
-                    
                     line_forecast = alt.Chart(df_forecast).mark_line(
                         color='#ffbf00', 
                         strokeDash=[5, 5]
@@ -942,18 +972,17 @@ def show_detail(df_dash, df_act, deal_id):
                         y=alt.Y('ForecastCum'),
                         tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
                     )
-                    
-                    # Combine layers
                     final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
                 else:
                     final_chart = line_actual
 
-                # Add Advance Line
+                # Add Advance Line (Executed Advance)
+                # Usually we want to see the Target Amount here if it differs? 
+                # Let's stick to Executed Advance as visual reference unless requested otherwise.
                 rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
                 
                 st.altair_chart(final_chart + rule_adv, use_container_width=True)
                 
-                # Legend / Key - UPDATED: Removed "Advance Target"
                 st.markdown("""
                 <div style="text-align: center; font-size: 0.8rem;">
                     <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
@@ -984,16 +1013,16 @@ def show_detail(df_dash, df_act, deal_id):
 # MAIN APP LOOP
 # -----------------------------------------------------------------------------
 def main():
-    df_dash_raw, df_act_raw = load_data()
+    df_dash_raw, df_act_raw, df_deals_raw = load_data()
     if df_dash_raw.empty:
         st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
         st.stop()
-    df_dash, df_act = process_data(df_dash_raw, df_act_raw)
+    df_dash, df_act = process_data(df_dash_raw, df_act_raw, df_deals_raw)
     
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
     else:
-        show_portfolio(df_dash, df_act) # Corrected call with 2 args
+        show_portfolio(df_dash, df_act)
 
 if __name__ == "__main__":
     main()
