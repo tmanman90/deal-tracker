@@ -591,33 +591,47 @@ def show_detail(df_dash, df_act, deal_id):
     col_gauge, col_stats = st.columns([1, 2])
     
     with col_gauge:
+        # CHANGED: Now visualizing Actual Recoupment % (0.0 to 1.0) instead of Ratio
+        actual_recoup = deal_row.get('% to BE Clean', 0)
+        expected_recoup = deal_row.get('Expected Recoupment', 0)
         pace_ratio = deal_row.get('Pace Ratio', 0)
-        chart_val = min(2.0, max(0.0, pace_ratio))
         
-        # Color logic based on new bands
-        if chart_val < 0.70:
+        # Clamp for visualization (0 to 100%)
+        chart_val = min(1.0, max(0.0, actual_recoup))
+        
+        # Color logic based on grade
+        if pace_ratio < 0.70:
             bar_color = 'red' # F, D, C
-        elif chart_val < 0.90:
+        elif pace_ratio < 0.90:
             bar_color = 'orange' # C+, B
         else:
             bar_color = '#33ff00' # Neon Green (B+, A, A+)
             
-        gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Pace'], 'color': [bar_color]})
-        gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
-            x=alt.X('val', scale=alt.Scale(domain=[0, 2]), title="Pace Ratio (1.0 = On Track)"),
-            color=alt.Color('color', scale=None, legend=None)
-        ).properties(height=80, title="PACE METER")
+        gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Recoupment'], 'color': [bar_color]})
         
-        rule = alt.Chart(pd.DataFrame({'x': [1.0]})).mark_rule(color='white', strokeDash=[5, 5]).encode(x='x')
+        # Create Bar
+        gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
+            x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
+            color=alt.Color('color', scale=None, legend=None)
+        ).properties(height=80, title="RECOUPMENT METER")
+        
+        # Add Benchmark Line (Expected Progress)
+        # This shows where the bar SHOULD be
+        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[5, 5], size=2).encode(x='x')
+        
         st.altair_chart(gauge + rule, use_container_width=True)
         
     with col_stats:
         if deal_row.get('Is Eligible', False):
             elapsed = deal_row.get('Elapsed Months', 0)
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
-            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 # From new column
+            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
             
-            # Using custom HTML for maximum control over style
+            if elapsed <= 4.5:
+                 note = "(Curved for ramp-up)"
+            else:
+                 note = "(Linear)"
+                 
             st.markdown(f"""
             <div class="diagnostic-box">
                 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
