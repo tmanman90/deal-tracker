@@ -98,6 +98,26 @@ st.markdown("""
         background-color: #000;
         border-right: 1px solid #33ff00;
     }
+    
+    /* DIAGNOSTIC BOX STYLE */
+    .diagnostic-box {
+        background-color: #0d1117;
+        border: 1px solid #33ff00;
+        padding: 15px;
+        border-radius: 5px;
+        color: #e6ffff; /* Very bright cyan/white */
+        font-size: 1.1rem; /* Larger font */
+        line-height: 1.6;
+        box-shadow: 0 0 5px #33ff00aa;
+    }
+    .diagnostic-label {
+        color: #ffbf00; /* Amber for labels */
+        font-weight: bold;
+    }
+    .diagnostic-value {
+        color: #33ff00; /* Neon green for values */
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -242,7 +262,6 @@ def calculate_pace_metrics(row, count):
     elapsed_months = max(0.1, elapsed_months)
     
     # --- RAMP-UP CURVE LOGIC (TIGHTENED) ---
-    # We tightened this curve to ensure early months are not graded too softly.
     # Denominators: 20 (M1), 18 (M2), 15 (M3), 13 (M4)
     # This ramps up to nearly full speed (12) by Month 4.
     
@@ -601,18 +620,15 @@ def show_detail(df_dash, df_act, deal_id):
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 # From new column
             
-            if elapsed <= 4.5:
-                 note = "(Curved for ramp-up)"
-            else:
-                 note = "(Linear)"
-                 
-            st.info(f"""
-            **DIAGNOSTIC:**
-            Deal is {elapsed:.1f} months into cycle {note}.
-            Forecasted Recoupment: {expected_recoup_pct:.1f}%
-            Actual Recoupment: {recoup_pct:.1f}%
-            Pace Ratio: {pace_ratio:.2f}x
-            """)
+            # Using custom HTML for maximum control over style
+            st.markdown(f"""
+            <div class="diagnostic-box">
+                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
+            </div>
+            """, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
