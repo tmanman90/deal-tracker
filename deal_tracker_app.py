@@ -491,7 +491,6 @@ def show_portfolio(df_dash, df_act):
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
         
     with col2:
-        # Get unique statuses
         all_status = df_dash['Status'].unique().tolist() if 'Status' in df_dash.columns else []
         status_filter = st.multiselect("STATUS", all_status, default=all_status)
         
@@ -663,7 +662,56 @@ def show_portfolio(df_dash, df_act):
         if pulse_data:
             pulse_df = pd.DataFrame(pulse_data)
             
-          # --- UPDATED PULSE CHART (TERMINAL STYLE) ---
+            # --- UPDATED PULSE CHART (TERMINAL STYLE) ---
+            # Define Neon Color Scheme
+            neon_range = ['#39FF14', '#00FFFF', '#FF00FF', '#FFFFFF', '#FFFF00']
+            
+            # Base Lines (Sharp points, step-after interpolation)
+            lines = alt.Chart(pulse_df).mark_line(
+                interpolate='step-after', # Jagged ledger style
+                strokeWidth=2
+            ).encode(
+                x=alt.X('MonthIndex', title='Months Since Launch', axis=alt.Axis(
+                    domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4],
+                    labelColor='#33ff00', titleColor='#ffbf00'
+                )),
+                y=alt.Y('PctRecouped', title='Recoupment %', axis=alt.Axis(
+                    format='%', domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4],
+                    labelColor='#33ff00', titleColor='#ffbf00'
+                )),
+                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None),
+                tooltip=['Artist', 'MonthIndex', alt.Tooltip('PctRecouped', format='.1%')]
+            )
+            
+            # Glowing Area Fill (Low opacity gradient)
+            area = alt.Chart(pulse_df).mark_area(
+                interpolate='step-after',
+                opacity=0.1,
+                color=alt.Gradient(
+                    gradient='linear',
+                    stops=[alt.GradientStop(color='#33ff00', offset=0),
+                           alt.GradientStop(color='rgba(0, 0, 0, 0)', offset=1)],
+                    x1=1, x2=1, y1=1, y2=0
+                )
+            ).encode(
+                x='MonthIndex',
+                y='PctRecouped',
+                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None)
+            )
+            
+            # Combine
+            pulse_chart = (area + lines).properties(
+                height=300,
+                width='container',
+                background='transparent' # Force transparent background
+            ).configure_view(
+                strokeWidth=0,  # No border around chart
+                fill=None # Ensure view fill is none
+            )
+            
+            st.altair_chart(pulse_chart, use_container_width=True, theme=None) # Disable Streamlit theme
+        else:
+            st.info("No transaction data available for Pulse Chart.")
 
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
