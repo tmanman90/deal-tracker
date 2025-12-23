@@ -143,6 +143,29 @@ st.markdown("""
         0% { transform: translateX(100%); }
         100% { transform: translateX(-100%); }
     }
+
+    /* CUSTOM DEAL ROW STYLE */
+    .deal-row {
+        background-color: #0d1117;
+        border: 1px solid #33ff00;
+        margin-bottom: 10px;
+        padding: 10px;
+        transition: transform 0.1s;
+    }
+    .deal-row:hover {
+        transform: scale(1.01);
+        box-shadow: 0 0 10px #33ff00;
+        border: 1px solid #e6ffff;
+    }
+    .deal-stat {
+        font-size: 0.9rem;
+        color: #888;
+    }
+    .deal-val-green { color: #33ff00; font-weight: bold; font-size: 1.1rem; }
+    .deal-val-red { color: #ff3333; font-weight: bold; font-size: 1.1rem; }
+    .deal-val-amber { color: #ffbf00; font-weight: bold; font-size: 1.1rem; }
+    .deal-title { font-size: 1.3rem; font-weight: bold; color: #e6ffff; text-transform: uppercase; }
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -464,38 +487,7 @@ def show_portfolio(df_dash, df_act):
     st.markdown("---")
     
     # --- MARKET OVERVIEW CHART ---
-    # Aggregate actuals by date
-    if not df_act.empty and 'Period End Date' in df_act.columns and 'Net Receipts' in df_act.columns:
-        valid_act = df_act.dropna(subset=['Period End Date']).copy()
-        if not valid_act.empty:
-            # Group by Month
-            # Normalize to 1st of month for cleaner grouping
-            valid_act['Month'] = valid_act['Period End Date'].apply(lambda x: x.replace(day=1))
-            market_data = valid_act.groupby('Month')['Net Receipts'].sum().reset_index()
-            market_data = market_data.sort_values('Month')
-            market_data['Cumulative Market'] = market_data['Net Receipts'].cumsum()
-            
-            # Create Area Chart
-            chart = alt.Chart(market_data).mark_area(
-                line={'color':'#33ff00'},
-                color=alt.Gradient(
-                    gradient='linear',
-                    stops=[alt.GradientStop(color='#33ff00', offset=0),
-                           alt.GradientStop(color='rgba(51, 255, 0, 0)', offset=1)],
-                    x1=1, x2=1, y1=1, y2=0
-                )
-            ).encode(
-                x=alt.X('Month', title=None, axis=alt.Axis(format='%b %Y', labelColor='#ffbf00')),
-                y=alt.Y('Cumulative Market', title='Total Market Value', axis=alt.Axis(format='$,.0f', labelColor='#ffbf00')),
-                tooltip=[alt.Tooltip('Month', format='%B %Y'), alt.Tooltip('Cumulative Market', format='$,.0f')]
-            ).properties(
-                height=200,
-                title="PORTFOLIO PERFORMANCE (CUMULATIVE)"
-            )
-            
-            st.altair_chart(chart, use_container_width=True)
-    
-    st.markdown("---")
+    # Removed as requested.
     
     # --- FILTERS ---
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -576,57 +568,60 @@ def show_portfolio(df_dash, df_act):
     
     st.markdown("---")
     
-    # --- ROSTER TABLE ---
-    # Prepare display dataframe
-    # Look for Artist name safely
-    artist_col = 'Artist / Project' if 'Artist / Project' in filtered.columns else 'Artist'
-    
-    display_cols = [
-        artist_col, 'Deal ID', 'Status', 'Grade', '% to BE', 
-        'Remaining to BE', 'Executed Advance', 'Predicted BE Date'
-    ]
-    # Only use columns that exist
-    existing_cols = [c for c in display_cols if c in filtered.columns]
-    
-    display_df = filtered[existing_cols].copy()
-    
-    # Rename for consistency if needed
-    if artist_col == 'Artist':
-        display_df = display_df.rename(columns={'Artist': 'Artist / Project'})
-    
-    # --- DISPLAY FORMATTING ---
-    if '% to BE' in display_df.columns and '% to BE Clean' in filtered.columns:
-        display_df['% to BE'] = filtered['% to BE Clean'].apply(lambda x: f"{x*100:.1f}%")
-        
-    for col in ['Remaining to BE', 'Executed Advance']:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
-
-    if 'Predicted BE Date' in display_df.columns:
-        display_df['Predicted BE Date'] = display_df['Predicted BE Date'].apply(parse_flexible_date)
-        display_df['Predicted BE Date'] = display_df['Predicted BE Date'].dt.strftime('%b %Y').fillna('-').str.upper()
-
-    if 'Grade' in display_df.columns:
-        mask_ineligible = filtered['Is Eligible'] == False
-        display_df.loc[mask_ineligible, 'Grade'] = "WAITING"
-        
+    # --- ROSTER TABLE (CUSTOM UI) ---
     st.markdown("### > SELECT DEAL TO INITIALIZE ANALYSIS")
     
-    event = st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        selection_mode="single-row",
-        on_select="rerun",
-        height=500
-    )
+    # Header Row
+    st.markdown("""
+    <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00;">
+        <div style="flex: 3;">ARTIST / PROJECT</div>
+        <div style="flex: 1;">ID</div>
+        <div style="flex: 1;">STATUS</div>
+        <div style="flex: 1;">GRADE</div>
+        <div style="flex: 1; text-align: right;">RECOUPED</div>
+        <div style="flex: 1.5; text-align: right;">REMAINING</div>
+        <div style="flex: 1;"></div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    if len(event.selection.rows) > 0:
-        row_idx = event.selection.rows[0]
-        if 'Deal ID' in filtered.columns:
-            selected_deal_id = filtered.iloc[row_idx]['Deal ID']
-            st.session_state['selected_deal_id'] = selected_deal_id
-            st.rerun()
+    for idx, row in filtered.iterrows():
+        # Clean Data for Display
+        artist = row.get('Artist / Project', row.get('Artist', 'Unknown'))
+        did = row.get('Deal ID', 'N/A')
+        status = row.get('Status', '-')
+        
+        # Grade Color
+        grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
+        grade_color = "#33ff00" if "A" in grade or "B+" in grade else "#ffbf00" if "B" in grade or "C+" in grade else "#ff3333" if "C" in grade or "D" in grade or "F" in grade else "#888"
+        
+        # Pct Color
+        pct_val = row.get('% to BE Clean', 0)
+        pct_str = f"{pct_val*100:.1f}%"
+        
+        rem_val = row.get('Remaining to BE', 0)
+        rem_str = f"${rem_val:,.0f}" if isinstance(rem_val, (int, float)) else str(rem_val)
+        
+        # Row Layout using Columns
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([3, 1, 1, 1, 1, 1.5, 1])
+        
+        with c1:
+            st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}</div>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<div style='padding-top: 5px; color: #888;'>{did}</div>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<div style='padding-top: 5px;'>{status}</div>", unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"<div style='padding-top: 5px; color: {grade_color}; font-weight: bold;'>{grade}</div>", unsafe_allow_html=True)
+        with c5:
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #33ff00;'>{pct_str}</div>", unsafe_allow_html=True)
+        with c6:
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #ffbf00;'>{rem_str}</div>", unsafe_allow_html=True)
+        with c7:
+            if st.button("OPEN", key=f"btn_{did}"):
+                st.session_state['selected_deal_id'] = did
+                st.rerun()
+                
+        st.markdown("<div style='border-bottom: 1px solid #333; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
