@@ -406,8 +406,8 @@ def process_data(df_dash, df_act, df_deals):
         if 'Deal ID' in df_deals.columns:
             df_deals['Deal ID Str'] = df_deals['Deal ID'].astype(str).str.strip()
             
-            # Columns to bring over
-            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months']
+            # Columns to bring over, including 'Tags'
+            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months', 'Tags']
             cols_existing = [c for c in cols_to_merge if c in df_deals.columns]
             
             if cols_existing and 'Deal ID Str' in df_dash.columns:
@@ -419,6 +419,10 @@ def process_data(df_dash, df_act, df_deals):
                     if f'{c}_y' in df_merged.columns:
                         df_merged[c] = df_merged[f'{c}_y'].fillna(df_merged[c])
                         df_merged.drop(columns=[f'{c}_y'], inplace=True)
+                
+                # Fill NaN tags with empty string
+                if 'Tags' in df_merged.columns:
+                    df_merged['Tags'] = df_merged['Tags'].fillna('')
                 
                 df_dash = df_merged
 
@@ -573,7 +577,7 @@ def show_portfolio(df_dash, df_act):
         sort_col = "% to BE Clean"
     elif sort_opt == "Grade":
         sort_col = "Grade"
-        ascending = True
+        ascending = True # A is 'smaller' than B in ascii
     elif sort_opt == "Cum Receipts":
         sort_col = "Cum Receipts"
     elif sort_opt == "Delta Months":
@@ -653,6 +657,12 @@ def show_portfolio(df_dash, df_act):
     for idx, row in filtered.iterrows():
         # Clean Data for Display
         artist = row.get('Artist / Project', row.get('Artist', 'Unknown'))
+        
+        # Check for Tags and append badge if 'AI'
+        tags = str(row.get('Tags', '')).upper()
+        if 'AI' in tags:
+            artist += ' <span style="font-size: 0.7em; border: 1px solid #33ff00; padding: 2px 6px; margin-left: 8px; border-radius: 4px; color: #33ff00;">AI</span>'
+            
         did = row.get('Deal ID', 'N/A')
         status = row.get('Status', '-')
         
@@ -702,7 +712,6 @@ def show_portfolio(df_dash, df_act):
                     deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
                     
                     # Need Target Amount to calculate % Recouped
-                    # UPDATED: Use Executed Advance here too for consistency with Pulse Chart
                     adv_row = df_dash[df_dash['Deal ID'] == did]
                     if not adv_row.empty:
                         target_amt = adv_row.iloc[0].get('Target Amount', 0)
@@ -877,6 +886,7 @@ def show_detail(df_dash, df_act, deal_id):
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
             is_legacy = deal_row.get('Is Legacy', False)
+            tag_val = str(deal_row.get('Tags', '')).upper()
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
@@ -885,12 +895,18 @@ def show_detail(df_dash, df_act, deal_id):
             
             legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
             
+            # Artist Type Line
+            artist_type_line = ""
+            if tag_val:
+                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
+            
             st.markdown(f"""
             <div class="diagnostic-box">
                 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
                 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
+                {artist_type_line}
                 {legacy_flag}
             </div>
             """, unsafe_allow_html=True)
@@ -968,9 +984,7 @@ def show_detail(df_dash, df_act, deal_id):
                 else:
                     final_chart = line_actual
 
-                # Add Advance Line (Executed Advance)
-                # Usually we want to see the Target Amount here if it differs? 
-                # Let's stick to Executed Advance as visual reference unless requested otherwise.
+                # Add Advance Line
                 rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
                 
                 st.altair_chart(final_chart + rule_adv, use_container_width=True)
