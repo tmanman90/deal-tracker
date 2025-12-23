@@ -118,6 +118,31 @@ st.markdown("""
         color: #33ff00; /* Neon green for values */
         font-weight: bold;
     }
+
+    /* TICKER TAPE */
+    .ticker-wrap {
+        width: 100%;
+        overflow: hidden;
+        background-color: #000;
+        border-bottom: 1px solid #33ff00;
+        padding: 5px 0;
+        margin-bottom: 20px;
+    }
+    .ticker {
+        display: inline-block;
+        white-space: nowrap;
+        animation: ticker 30s linear infinite;
+    }
+    .ticker-item {
+        display: inline-block;
+        padding: 0 2rem;
+        font-size: 1.2rem;
+        color: #33ff00;
+    }
+    @keyframes ticker {
+        0% { transform: translateX(100%); }
+        100% { transform: translateX(-100%); }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -402,8 +427,63 @@ def process_data(df_dash, df_act):
 # -----------------------------------------------------------------------------
 # UI: PORTFOLIO PAGE
 # -----------------------------------------------------------------------------
-def show_portfolio(df_dash):
+def show_portfolio(df_dash, df_act):
     st.title(">>> GLOBAL DEAL TRACKER_")
+    
+    # --- TICKER TAPE ---
+    # Generate ticker items from active deals
+    ticker_items = []
+    if not df_dash.empty:
+        # Sort by best performing grade if available, else standard
+        sorted_deals = df_dash.sort_values('Pace Ratio', ascending=False)
+        for _, row in sorted_deals.iterrows():
+            symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
+            item = f"{row['Artist / Project']} ({row.get('Grade', 'N/A')}) {symbol} {row.get('% to BE Clean', 0)*100:.1f}%"
+            ticker_items.append(item)
+    
+    ticker_html = f"""
+    <div class="ticker-wrap">
+        <div class="ticker">
+            <span class="ticker-item">{' &nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp; '.join(ticker_items)}</span>
+        </div>
+    </div>
+    """
+    st.markdown(ticker_html, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # --- MARKET OVERVIEW CHART ---
+    # Aggregate actuals by date
+    if not df_act.empty and 'Period End Date' in df_act.columns and 'Net Receipts' in df_act.columns:
+        valid_act = df_act.dropna(subset=['Period End Date']).copy()
+        if not valid_act.empty:
+            # Group by Month
+            # Normalize to 1st of month for cleaner grouping
+            valid_act['Month'] = valid_act['Period End Date'].apply(lambda x: x.replace(day=1))
+            market_data = valid_act.groupby('Month')['Net Receipts'].sum().reset_index()
+            market_data = market_data.sort_values('Month')
+            market_data['Cumulative Market'] = market_data['Net Receipts'].cumsum()
+            
+            # Create Area Chart
+            chart = alt.Chart(market_data).mark_area(
+                line={'color':'#33ff00'},
+                color=alt.Gradient(
+                    gradient='linear',
+                    stops=[alt.GradientStop(color='#33ff00', offset=0),
+                           alt.GradientStop(color='rgba(51, 255, 0, 0)', offset=1)],
+                    x1=1, x2=1, y1=1, y2=0
+                )
+            ).encode(
+                x=alt.X('Month', title=None, axis=alt.Axis(format='%b %Y', labelColor='#ffbf00')),
+                y=alt.Y('Cumulative Market', title='Total Market Value', axis=alt.Axis(format='$,.0f', labelColor='#ffbf00')),
+                tooltip=[alt.Tooltip('Month', format='%B %Y'), alt.Tooltip('Cumulative Market', format='$,.0f')]
+            ).properties(
+                height=200,
+                title="PORTFOLIO PERFORMANCE (CUMULATIVE)"
+            )
+            
+            st.altair_chart(chart, use_container_width=True)
+    
     st.markdown("---")
     
     # --- FILTERS ---
