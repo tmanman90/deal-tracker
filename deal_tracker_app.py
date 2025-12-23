@@ -403,8 +403,23 @@ def show_portfolio(df_dash):
     # Ensure cols exist
     existing_cols = [c for c in display_cols if c in filtered.columns]
     
+    # Create display copy
     display_df = filtered[existing_cols].copy()
     
+    # --- DISPLAY FORMATTING ---
+    # 1. Percentages
+    if '% to BE' in display_df.columns and '% to BE Clean' in filtered.columns:
+        display_df['% to BE'] = filtered['% to BE Clean'].apply(lambda x: f"{x*100:.1f}%")
+        
+    # 2. Currency
+    for col in ['Remaining to BE', 'Executed Advance']:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
+
+    # 3. Dates (Jan 2026)
+    if 'Predicted BE Date' in display_df.columns:
+        display_df['Predicted BE Date'] = pd.to_datetime(display_df['Predicted BE Date'], errors='coerce').dt.strftime('%b %Y').fillna('-').str.upper()
+
     # Hide Grade if not eligible
     if 'Grade' in display_df.columns:
         # We need to map back to original indices to check eligibility, 
