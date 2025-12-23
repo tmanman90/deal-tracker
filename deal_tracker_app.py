@@ -841,8 +841,8 @@ def show_detail(df_dash, df_act, deal_id):
     rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
-    be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
+start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
     row1_c1.metric("STATUS", status_val)
