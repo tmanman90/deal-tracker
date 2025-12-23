@@ -118,6 +118,31 @@ st.markdown("""
         color: #33ff00; /* Neon green for values */
         font-weight: bold;
     }
+
+    /* TICKER TAPE */
+    .ticker-wrap {
+        width: 100%;
+        overflow: hidden;
+        background-color: #000;
+        border-bottom: 1px solid #33ff00;
+        padding: 5px 0;
+        margin-bottom: 20px;
+    }
+    .ticker {
+        display: inline-block;
+        white-space: nowrap;
+        animation: ticker 30s linear infinite;
+    }
+    .ticker-item {
+        display: inline-block;
+        padding: 0 2rem;
+        font-size: 1.2rem;
+        color: #33ff00;
+    }
+    @keyframes ticker {
+        0% { transform: translateX(100%); }
+        100% { transform: translateX(-100%); }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -402,8 +427,74 @@ def process_data(df_dash, df_act):
 # -----------------------------------------------------------------------------
 # UI: PORTFOLIO PAGE
 # -----------------------------------------------------------------------------
-def show_portfolio(df_dash):
+def show_portfolio(df_dash, df_act):
     st.title(">>> GLOBAL DEAL TRACKER_")
+    
+    # --- TICKER TAPE ---
+    # Generate ticker items from active deals
+    ticker_items = []
+    if not df_dash.empty:
+        # Sort by best performing grade if available, else standard
+        if 'Pace Ratio' in df_dash.columns:
+            sorted_deals = df_dash.sort_values('Pace Ratio', ascending=False)
+        else:
+            sorted_deals = df_dash
+            
+        for _, row in sorted_deals.iterrows():
+            # Robust key access for Artist Name
+            artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
+            
+            symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
+            # Ensure safe access to clean percentage
+            pct = row.get('% to BE Clean', 0)
+            if pd.isna(pct): pct = 0.0
+            
+            item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
+            ticker_items.append(item)
+    
+    ticker_html = f"""
+    <div class="ticker-wrap">
+        <div class="ticker">
+            <span class="ticker-item">{' &nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp; '.join(ticker_items)}</span>
+        </div>
+    </div>
+    """
+    st.markdown(ticker_html, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # --- MARKET OVERVIEW CHART ---
+    # Aggregate actuals by date
+    if not df_act.empty and 'Period End Date' in df_act.columns and 'Net Receipts' in df_act.columns:
+        valid_act = df_act.dropna(subset=['Period End Date']).copy()
+        if not valid_act.empty:
+            # Group by Month
+            # Normalize to 1st of month for cleaner grouping
+            valid_act['Month'] = valid_act['Period End Date'].apply(lambda x: x.replace(day=1))
+            market_data = valid_act.groupby('Month')['Net Receipts'].sum().reset_index()
+            market_data = market_data.sort_values('Month')
+            market_data['Cumulative Market'] = market_data['Net Receipts'].cumsum()
+            
+            # Create Area Chart
+            chart = alt.Chart(market_data).mark_area(
+                line={'color':'#33ff00'},
+                color=alt.Gradient(
+                    gradient='linear',
+                    stops=[alt.GradientStop(color='#33ff00', offset=0),
+                           alt.GradientStop(color='rgba(51, 255, 0, 0)', offset=1)],
+                    x1=1, x2=1, y1=1, y2=0
+                )
+            ).encode(
+                x=alt.X('Month', title=None, axis=alt.Axis(format='%b %Y', labelColor='#ffbf00')),
+                y=alt.Y('Cumulative Market', title='Total Market Value', axis=alt.Axis(format='$,.0f', labelColor='#ffbf00')),
+                tooltip=[alt.Tooltip('Month', format='%B %Y'), alt.Tooltip('Cumulative Market', format='$,.0f')]
+            ).properties(
+                height=200,
+                title="PORTFOLIO PERFORMANCE (CUMULATIVE)"
+            )
+            
+            st.altair_chart(chart, use_container_width=True)
+    
     st.markdown("---")
     
     # --- FILTERS ---
@@ -428,8 +519,12 @@ def show_portfolio(df_dash):
     
     if search:
         mask = pd.Series([False] * len(filtered))
+        # Handle Artist column name robustly
         if 'Artist / Project' in filtered.columns:
             mask = mask | filtered['Artist / Project'].astype(str).str.lower().str.contains(search)
+        elif 'Artist' in filtered.columns:
+            mask = mask | filtered['Artist'].astype(str).str.lower().str.contains(search)
+            
         if 'Deal ID' in filtered.columns:
             mask = mask | filtered['Deal ID'].astype(str).str.lower().str.contains(search)
         filtered = filtered[mask]
@@ -483,13 +578,21 @@ def show_portfolio(df_dash):
     
     # --- ROSTER TABLE ---
     # Prepare display dataframe
+    # Look for Artist name safely
+    artist_col = 'Artist / Project' if 'Artist / Project' in filtered.columns else 'Artist'
+    
     display_cols = [
-        'Artist / Project', 'Deal ID', 'Status', 'Grade', '% to BE', 
+        artist_col, 'Deal ID', 'Status', 'Grade', '% to BE', 
         'Remaining to BE', 'Executed Advance', 'Predicted BE Date'
     ]
+    # Only use columns that exist
     existing_cols = [c for c in display_cols if c in filtered.columns]
     
     display_df = filtered[existing_cols].copy()
+    
+    # Rename for consistency if needed
+    if artist_col == 'Artist':
+        display_df = display_df.rename(columns={'Artist': 'Artist / Project'})
     
     # --- DISPLAY FORMATTING ---
     if '% to BE' in display_df.columns and '% to BE Clean' in filtered.columns:
@@ -772,7 +875,7 @@ def main():
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
     else:
-        show_portfolio(df_dash)
+        show_portfolio(df_dash, df_act)
 
 if __name__ == "__main__":
     main()
