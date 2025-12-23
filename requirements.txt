@@ -1,1 +1,6 @@
-deal_tracker_app.py
+streamlit
+pandas
+altair
+gspread
+google-auth
+numpy
