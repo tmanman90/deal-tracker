@@ -879,7 +879,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -1056,9 +1056,14 @@ def show_detail(df_dash, df_act, deal_id):
                 st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
             elif last_rolling > 0:
                 months_to_go = remaining / last_rolling
+                
+                # NEW LOGIC: Calculate Total Time to Recoup
+                elapsed = deal_row.get('Elapsed Months', 0)
+                total_months = elapsed + months_to_go
+                
                 st.markdown(f"""
                 BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
-                ESTIMATED TIME TO RECOUP: **{months_to_go:.1f} MONTHS**
+                ESTIMATED TOTAL TIME TO RECOUP: **{total_months:.1f} MONTHS**
                 """)
             else:
                 st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
