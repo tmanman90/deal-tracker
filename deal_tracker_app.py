@@ -184,15 +184,14 @@ def clean_percent(val):
     except:
         return 0.0
 
-def calculate_pace_metrics(row, data_months_count):
+def calculate_pace_metrics(row, count):
     """
     Calculates Grade and Pace based on Benchmark (12 months).
     Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months).
     """
     # 1. Eligibility Check
-    # UPDATED: Lowered requirement to 3 months (was 5)
-    # Ensures that 3 months is eligible (3 < 3 is False, so it proceeds)
-    if data_months_count < 3:
+    # UPDATED: Lowered requirement to 3 data points
+    if count < 3:
         return "N/A", 0.0, False, 0
     
     # 2. Parse Dates
@@ -269,18 +268,21 @@ def process_data(df_dash, df_act):
         else:
             df_dash[col] = 0.0
     
-    # Calculate Data Eligibility (Distinct Months per Deal)
-    # Group by Deal ID, convert date to period 'M' to count unique months
+    # Calculate Data Eligibility (Count of ROWS/TRANSACTIONS per Deal)
     eligibility_map = {}
     if not df_act.empty:
         # Check for necessary cols
         if 'Period End Date' in df_act.columns:
+            # We filter for valid dates, but count ROWS (size) instead of unique months (nunique)
+            # This aligns with the visual chart which shows M1, M2, M3 based on rows
             temp = df_act.dropna(subset=['Period End Date']).copy()
-            temp['MonthPeriod'] = temp['Period End Date'].dt.to_period('M')
+            
             if 'Deal ID' in temp.columns:
                 # Clean Deal ID to string to ensure matching and strip whitespace
                 temp['Deal ID'] = temp['Deal ID'].astype(str).str.strip()
-                counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
+                
+                # Use .size() to count Total Data Points instead of Unique Months
+                counts = temp.groupby('Deal ID').size()
                 eligibility_map = counts.to_dict()
     
     # Enrich Dashboard with Grades
@@ -288,21 +290,27 @@ def process_data(df_dash, df_act):
     ratios = []
     is_eligible = []
     elapsed_list = []
+    data_points_list = []
     
     for _, row in df_dash.iterrows():
         # Handle missing Deal ID column gracefully and strip whitespace
         did = str(row.get('Deal ID', '')).strip()
-        months_count = eligibility_map.get(did, 0) # default 0 if no actuals
-        g, r, e, el_m = calculate_pace_metrics(row, months_count)
+        
+        # Get count (default 0)
+        count = eligibility_map.get(did, 0)
+        
+        g, r, e, el_m = calculate_pace_metrics(row, count)
         grades.append(g)
         ratios.append(r)
         is_eligible.append(e)
         elapsed_list.append(el_m)
+        data_points_list.append(count)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
     df_dash['Elapsed Months'] = elapsed_list
+    df_dash['Data Points Found'] = data_points_list # For diagnostic display
     
     # Clean % to BE for display/sorting
     if '% to BE' in df_dash.columns:
@@ -571,8 +579,9 @@ def show_detail(df_dash, df_act, deal_id):
             Pace Ratio: {pace_ratio:.2f}x
             """)
         else:
-            # UPDATED: Lowered requirement text to 3 months (was 5)
-            st.warning("INSUFFICIENT DATA FOR PACE GRADING (<3 MONTHS ACTUALS)")
+            # Display Diagnostic info on WHY it failed
+            count_found = deal_row.get('Data Points Found', 0)
+            st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
 
     # --- CHARTS ---
     st.markdown("### > PERFORMANCE VISUALIZATION (NORMALIZED M1, M2...)")
