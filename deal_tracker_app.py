@@ -191,6 +191,7 @@ def calculate_pace_metrics(row, data_months_count):
     """
     # 1. Eligibility Check
     # UPDATED: Lowered requirement to 3 months (was 5)
+    # Ensures that 3 months is eligible (3 < 3 is False, so it proceeds)
     if data_months_count < 3:
         return "N/A", 0.0, False, 0
     
@@ -277,8 +278,8 @@ def process_data(df_dash, df_act):
             temp = df_act.dropna(subset=['Period End Date']).copy()
             temp['MonthPeriod'] = temp['Period End Date'].dt.to_period('M')
             if 'Deal ID' in temp.columns:
-                # Clean Deal ID to string to ensure matching
-                temp['Deal ID'] = temp['Deal ID'].astype(str)
+                # Clean Deal ID to string to ensure matching and strip whitespace
+                temp['Deal ID'] = temp['Deal ID'].astype(str).str.strip()
                 counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
                 eligibility_map = counts.to_dict()
     
@@ -289,8 +290,8 @@ def process_data(df_dash, df_act):
     elapsed_list = []
     
     for _, row in df_dash.iterrows():
-        # Handle missing Deal ID column gracefully
-        did = str(row.get('Deal ID', ''))
+        # Handle missing Deal ID column gracefully and strip whitespace
+        did = str(row.get('Deal ID', '')).strip()
         months_count = eligibility_map.get(did, 0) # default 0 if no actuals
         g, r, e, el_m = calculate_pace_metrics(row, months_count)
         grades.append(g)
