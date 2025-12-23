@@ -254,6 +254,12 @@ def process_data(df_dash, df_act):
     if df_dash.empty or df_act.empty:
         return df_dash, df_act
 
+    # 1. GLOBAL STRIP: Clean Deal IDs immediately so both eligibility and charts match
+    if 'Deal ID' in df_act.columns:
+        df_act['Deal ID'] = df_act['Deal ID'].astype(str).str.strip()
+    if 'Deal ID' in df_dash.columns:
+        df_dash['Deal ID'] = df_dash['Deal ID'].astype(str).str.strip()
+
     # Process Actuals Dates & Values
     if 'Net Receipts' in df_act.columns:
         df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
@@ -271,19 +277,12 @@ def process_data(df_dash, df_act):
     # Calculate Data Eligibility (Count of ROWS/TRANSACTIONS per Deal)
     eligibility_map = {}
     if not df_act.empty:
-        # Check for necessary cols
-        if 'Period End Date' in df_act.columns:
-            # We filter for valid dates, but count ROWS (size) instead of unique months (nunique)
-            # This aligns with the visual chart which shows M1, M2, M3 based on rows
-            temp = df_act.dropna(subset=['Period End Date']).copy()
-            
-            if 'Deal ID' in temp.columns:
-                # Clean Deal ID to string to ensure matching and strip whitespace
-                temp['Deal ID'] = temp['Deal ID'].astype(str).str.strip()
-                
-                # Use .size() to count Total Data Points instead of Unique Months
-                counts = temp.groupby('Deal ID').size()
-                eligibility_map = counts.to_dict()
+        if 'Deal ID' in df_act.columns:
+            # We used to dropna(subset=['Period End Date']) here.
+            # REMOVED that filter. Now we count ALL rows matching the ID.
+            # This ensures "3 bars on chart" = "3 data points found".
+            counts = df_act.groupby('Deal ID').size()
+            eligibility_map = counts.to_dict()
     
     # Enrich Dashboard with Grades
     grades = []
@@ -293,8 +292,7 @@ def process_data(df_dash, df_act):
     data_points_list = []
     
     for _, row in df_dash.iterrows():
-        # Handle missing Deal ID column gracefully and strip whitespace
-        did = str(row.get('Deal ID', '')).strip()
+        did = str(row.get('Deal ID', ''))
         
         # Get count (default 0)
         count = eligibility_map.get(did, 0)
@@ -467,12 +465,8 @@ def show_detail(df_dash, df_act, deal_id):
     if 'Deal ID' not in df_dash.columns:
         st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
         return
-
-    df_dash['Deal ID'] = df_dash['Deal ID'].astype(str)
-    
-    if 'Deal ID' in df_act.columns:
-        df_act['Deal ID'] = df_act['Deal ID'].astype(str)
         
+    # No need to astype(str) here again, process_data did it globally.
     deal_id = str(deal_id)
 
     # Get Deal Data
@@ -588,9 +582,10 @@ def show_detail(df_dash, df_act, deal_id):
     
     if not deal_act.empty:
         # Prepare Data for Charts
-        # Sort by date
+        # Sort by date (handling NaT for sort)
         if 'Period End Date' in deal_act.columns:
-            deal_act = deal_act.sort_values('Period End Date')
+            # Sort, putting NaT last (or first, doesn't matter much for normalized, but keeps valid chronological)
+            deal_act = deal_act.sort_values('Period End Date', na_position='first')
         
         # Normalize Date to "M#"
         deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
@@ -613,7 +608,7 @@ def show_detail(df_dash, df_act, deal_id):
             bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
                 x=alt.X('MonthLabel', sort=None, title='Period'),
                 y=alt.Y('Net Receipts', title='Net Receipts'),
-                tooltip=['MonthLabel', 'Net Receipts', 'Period End Date'] if 'Period End Date' in deal_act.columns else ['MonthLabel', 'Net Receipts']
+                tooltip=['MonthLabel', 'Net Receipts']
             ).properties(title="MONTHLY ACTUALS")
             st.altair_chart(bar, use_container_width=True)
             
