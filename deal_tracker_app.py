@@ -102,7 +102,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AUTH & DATA LOADING (UPDATED TO FIX HEADER ERROR)
+# AUTH & DATA LOADING
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
@@ -208,26 +208,24 @@ def parse_flexible_date(date_str):
         except:
             continue
             
-    # Last resort: let pandas guess (but it might be slow or wrong on ambiguous cases)
+    # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
 
 def calculate_pace_metrics(row, count):
     """
-    Calculates Grade and Pace based on Benchmark (12 months).
+    Calculates Grade and Pace based on Benchmark.
+    Includes 'Ramp-up Curve' for first 4 months.
     Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months).
     """
-    # 1. Eligibility Check
-    # UPDATED: Lowered requirement to 3 data points
+    # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
         return "N/A", 0.0, False, 0
     
     # 2. Parse Dates
     try:
-        # Check if 'Forecast Start Date' exists
         if 'Forecast Start Date' not in row:
              return "N/A", 0.0, False, 0
              
-        # Use flexible parser for dashboard dates too
         forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
             return "N/A", 0.0, False, 0
@@ -237,16 +235,34 @@ def calculate_pace_metrics(row, count):
     # 3. Calculate Elapsed Months vs Benchmark
     today = pd.Timestamp.now()
     if forecast_start > today:
-        elapsed_months = 0 # Not started
+        elapsed_months = 0 
     else:
         elapsed_months = (today - forecast_start).days / 30.4375
     
-    # Avoid div by zero or negative
     elapsed_months = max(0.1, elapsed_months)
     
-    # Benchmark: 100% Recoupment in 12 Months
-    # Expected progress (capped at 1.0 i.e. 100%)
-    expected_progress = min(1.0, elapsed_months / 12.0)
+    # --- RAMP-UP CURVE LOGIC ---
+    # Accounts for slow "trickle-in" payments from distributors in early months.
+    # Instead of linear (x/12), we use a softer denominator.
+    
+    if elapsed_months <= 1.5:
+        # Month 1: Expect 1/24th pace
+        expected_progress = elapsed_months / 24.0
+    elif elapsed_months <= 2.5:
+        # Month 2: Expect 2/20th pace
+        expected_progress = elapsed_months / 20.0
+    elif elapsed_months <= 3.5:
+        # Month 3: Expect 3/18th pace
+        expected_progress = elapsed_months / 18.0
+    elif elapsed_months <= 4.5:
+        # Month 4: Expect 4/16th pace
+        expected_progress = elapsed_months / 16.0
+    else:
+        # Month 5+: Standard linear expectation (x/12)
+        expected_progress = elapsed_months / 12.0
+
+    # Cap expectation at 1.0 (100%)
+    expected_progress = min(1.0, expected_progress)
     
     # Actual progress
     if '% to BE' in row:
@@ -260,14 +276,21 @@ def calculate_pace_metrics(row, count):
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # 4. Assign Grade
-    if pace_ratio >= 1.25:
+    # --- UPDATED GRADING BANDS (LESS HARSH) ---
+    # Target (Pace Ratio = 1.0) is the goal.
+    # A: >= 1.00 (At target or better)
+    # B: >= 0.85 (Close to target)
+    # C: >= 0.70 (Behind)
+    # D: >= 0.50 (Significantly behind)
+    # F: < 0.50
+    
+    if pace_ratio >= 1.00:
         grade = "A"
-    elif pace_ratio >= 1.05:
-        grade = "B"
     elif pace_ratio >= 0.85:
+        grade = "B"
+    elif pace_ratio >= 0.70:
         grade = "C"
-    elif pace_ratio >= 0.65:
+    elif pace_ratio >= 0.50:
         grade = "D"
     else:
         grade = "F"
@@ -282,7 +305,7 @@ def process_data(df_dash, df_act):
     if df_dash.empty or df_act.empty:
         return df_dash, df_act
 
-    # 1. GLOBAL STRIP: Clean Deal IDs immediately so both eligibility and charts match
+    # 1. GLOBAL STRIP: Clean Deal IDs
     if 'Deal ID' in df_act.columns:
         df_act['Deal ID'] = df_act['Deal ID'].astype(str).str.strip()
     if 'Deal ID' in df_dash.columns:
@@ -294,7 +317,6 @@ def process_data(df_dash, df_act):
     
     # ROBUST DATE CLEANING FOR ACTUALS
     if 'Period End Date' in df_act.columns:
-        # Apply custom flexible parser to handle mixed '2025' and '25' years
         df_act['Period End Date'] = df_act['Period End Date'].apply(parse_flexible_date)
     
     # Clean Dashboard Numerics
@@ -305,13 +327,11 @@ def process_data(df_dash, df_act):
         else:
             df_dash[col] = 0.0
     
-    # Calculate Data Eligibility (Count of ROWS/TRANSACTIONS per Deal)
+    # Calculate Data Eligibility
     eligibility_map = {}
     if not df_act.empty:
         if 'Deal ID' in df_act.columns:
-            # We used to dropna(subset=['Period End Date']) here.
-            # REMOVED that filter. Now we count ALL rows matching the ID.
-            # This ensures "3 bars on chart" = "3 data points found".
+            # Count ALL rows matching the ID.
             counts = df_act.groupby('Deal ID').size()
             eligibility_map = counts.to_dict()
     
@@ -339,7 +359,7 @@ def process_data(df_dash, df_act):
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
     df_dash['Elapsed Months'] = elapsed_list
-    df_dash['Data Points Found'] = data_points_list # For diagnostic display
+    df_dash['Data Points Found'] = data_points_list 
     
     # Clean % to BE for display/sorting
     if '% to BE' in df_dash.columns:
@@ -377,7 +397,6 @@ def show_portfolio(df_dash):
     filtered = df_dash.copy()
     
     if search:
-        # Safe filter
         mask = pd.Series([False] * len(filtered))
         if 'Artist / Project' in filtered.columns:
             mask = mask | filtered['Artist / Project'].astype(str).str.lower().str.contains(search)
@@ -408,7 +427,6 @@ def show_portfolio(df_dash):
          sort_col = "Delta Months"
 
     if sort_col and sort_col in filtered.columns:
-        # Special handling for Delta Months numeric conversion
         if sort_col == "Delta Months":
              filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
@@ -424,7 +442,7 @@ def show_portfolio(df_dash):
     total_rec = filtered['Cum Receipts'].sum() if 'Cum Receipts' in filtered.columns else 0
     kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
     
-    # Weighted % to BE (Total Rec / Total Adv)
+    # Weighted % to BE
     if total_adv > 0:
         w_pct = (total_rec / total_adv) * 100
         kpi4.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
@@ -439,37 +457,26 @@ def show_portfolio(df_dash):
         'Artist / Project', 'Deal ID', 'Status', 'Grade', '% to BE', 
         'Remaining to BE', 'Executed Advance', 'Predicted BE Date'
     ]
-    # Ensure cols exist
     existing_cols = [c for c in display_cols if c in filtered.columns]
     
-    # Create display copy
     display_df = filtered[existing_cols].copy()
     
     # --- DISPLAY FORMATTING ---
-    # 1. Percentages
     if '% to BE' in display_df.columns and '% to BE Clean' in filtered.columns:
         display_df['% to BE'] = filtered['% to BE Clean'].apply(lambda x: f"{x*100:.1f}%")
         
-    # 2. Currency
     for col in ['Remaining to BE', 'Executed Advance']:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
 
-    # 3. Dates (Jan 2026)
     if 'Predicted BE Date' in display_df.columns:
-        # Handle predictions using the same flexible parser
         display_df['Predicted BE Date'] = display_df['Predicted BE Date'].apply(parse_flexible_date)
         display_df['Predicted BE Date'] = display_df['Predicted BE Date'].dt.strftime('%b %Y').fillna('-').str.upper()
 
-    # Hide Grade if not eligible
     if 'Grade' in display_df.columns:
-        # We need to map back to original indices to check eligibility, 
-        # but display_df is filtered. We can join on index or re-apply logic.
-        # Simplest: use 'Is Eligible' from filtered df
         mask_ineligible = filtered['Is Eligible'] == False
         display_df.loc[mask_ineligible, 'Grade'] = "WAITING"
         
-    # Use Streamlit's selection API
     st.markdown("### > SELECT DEAL TO INITIALIZE ANALYSIS")
     
     event = st.dataframe(
@@ -481,10 +488,8 @@ def show_portfolio(df_dash):
         height=500
     )
     
-    # Check selection
     if len(event.selection.rows) > 0:
         row_idx = event.selection.rows[0]
-        # Get the actual Deal ID from the filtered dataframe
         if 'Deal ID' in filtered.columns:
             selected_deal_id = filtered.iloc[row_idx]['Deal ID']
             st.session_state['selected_deal_id'] = selected_deal_id
@@ -494,15 +499,11 @@ def show_portfolio(df_dash):
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
 def show_detail(df_dash, df_act, deal_id):
-    # Ensure ID match is string-safe
     if 'Deal ID' not in df_dash.columns:
         st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
         return
         
-    # No need to astype(str) here again, process_data did it globally.
     deal_id = str(deal_id)
-
-    # Get Deal Data
     deal_subset = df_dash[df_dash['Deal ID'] == deal_id]
     
     if deal_subset.empty:
@@ -513,19 +514,14 @@ def show_detail(df_dash, df_act, deal_id):
         return
 
     deal_row = deal_subset.iloc[0]
-    
-    # Deal Specific Actuals
     deal_act = pd.DataFrame()
     if not df_act.empty and 'Deal ID' in df_act.columns:
         deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
     
-    # --- NAVIGATION ---
     if st.button("<< RETURN TO DASHBOARD"):
         del st.session_state['selected_deal_id']
         st.rerun()
         
-    # SAFE ARTIST NAME EXTRACTION
-    # Tries 'Artist / Project', then 'Artist', then 'Project', else 'Unknown'
     artist_name = deal_row.get('Artist / Project', 
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
@@ -534,22 +530,15 @@ def show_detail(df_dash, df_act, deal_id):
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
-    
-    # Formatting helper
     grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
-    
-    # Safely get values with .get() to prevent KeyError
     status_val = deal_row.get('Status', '-')
     adv_val = deal_row.get('Executed Advance', 0)
     pct_val = deal_row.get('% to BE Clean', 0) * 100
-    
     cum_val = deal_row.get('Cum Receipts', 0)
     rem_val = deal_row.get('Remaining to BE', 0)
     
-    # Format dates nicely
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
     start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
-    
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -572,46 +561,43 @@ def show_detail(df_dash, df_act, deal_id):
     col_gauge, col_stats = st.columns([1, 2])
     
     with col_gauge:
-        # Create a simple gauge chart using Altair
         pace_ratio = deal_row.get('Pace Ratio', 0)
-        
-        # Clamp for visualization
         chart_val = min(2.0, max(0.0, pace_ratio))
         
-        # Determine color in Python to avoid Altair condition errors
-        if chart_val < 0.8:
+        # Color logic based on new bands
+        if chart_val < 0.70:
             bar_color = 'red'
-        elif chart_val < 1.0:
+        elif chart_val < 0.85:
             bar_color = 'orange'
         else:
             bar_color = '#33ff00' # Neon Green
             
-        # Simple bar gauge with safe python color logic
         gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Pace'], 'color': [bar_color]})
-        
         gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
             x=alt.X('val', scale=alt.Scale(domain=[0, 2]), title="Pace Ratio (1.0 = On Track)"),
             color=alt.Color('color', scale=None, legend=None)
         ).properties(height=80, title="PACE METER")
         
-        # Add benchmark line at 1.0
         rule = alt.Chart(pd.DataFrame({'x': [1.0]})).mark_rule(color='white', strokeDash=[5, 5]).encode(x='x')
-        
         st.altair_chart(gauge + rule, use_container_width=True)
         
     with col_stats:
         if deal_row.get('Is Eligible', False):
             elapsed = deal_row.get('Elapsed Months', 0)
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
+            
+            if elapsed <= 4.5:
+                 note = "(Curved for ramp-up)"
+            else:
+                 note = "(Linear)"
+                 
             st.info(f"""
             **DIAGNOSTIC:**
-            Deal is {elapsed:.1f} months into cycle (Benchmark: 12.0).
-            Expected Recoupment: {min(100, (elapsed/12)*100):.1f}%
+            Deal is {elapsed:.1f} months into cycle {note}.
             Actual Recoupment: {recoup_pct:.1f}%
             Pace Ratio: {pace_ratio:.2f}x
             """)
         else:
-            # Display Diagnostic info on WHY it failed
             count_found = deal_row.get('Data Points Found', 0)
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
 
@@ -619,25 +605,17 @@ def show_detail(df_dash, df_act, deal_id):
     st.markdown("### > PERFORMANCE VISUALIZATION (NORMALIZED M1, M2...)")
     
     if not deal_act.empty:
-        # Prepare Data for Charts
-        # 1. DROP INVALID DATES STRICTLY. If it's NaT, it's not a month.
         if 'Period End Date' in deal_act.columns:
             deal_act = deal_act.dropna(subset=['Period End Date']).copy()
-            # Sort chronologically. 
             deal_act = deal_act.sort_values('Period End Date')
         
         if not deal_act.empty:
-            # Normalize Date to "M#"
             deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
             deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
-            
-            # Format Date for Tooltip
             deal_act['DateStr'] = deal_act['Period End Date'].dt.strftime('%b %Y')
             
-            # Calculate Cumulative
             if 'Net Receipts' in deal_act.columns:
                 deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
-                # Rolling Average (3 months)
                 deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
             else:
                 deal_act['CumNet'] = 0
@@ -647,8 +625,6 @@ def show_detail(df_dash, df_act, deal_id):
             c1, c2 = st.columns(2)
             
             with c1:
-                # BAR CHART: MONTHLY RECEIPTS
-                # Added 'DateStr' to tooltip for debugging
                 bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
                     x=alt.X('MonthLabel', sort=None, title='Period'),
                     y=alt.Y('Net Receipts', title='Net Receipts'),
@@ -657,21 +633,15 @@ def show_detail(df_dash, df_act, deal_id):
                 st.altair_chart(bar, use_container_width=True)
                 
             with c2:
-                # LINE CHART: CUMULATIVE vs ADVANCE
                 line = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
                     x=alt.X('MonthLabel', sort=None, title='Period'),
                     y=alt.Y('CumNet', title='Cumulative Net'),
                     tooltip=['MonthLabel', 'DateStr', 'CumNet']
                 )
-                
-                # Advance Line
                 rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='#ffbf00', strokeDash=[4, 4]).encode(y='y')
-                
                 st.altair_chart(line + rule_adv, use_container_width=True)
                 
-            # --- PROJECTION LOGIC ---
             st.markdown("### > TERMINAL FORECAST")
-            
             last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
             remaining = rem_val
             
@@ -687,26 +657,19 @@ def show_detail(df_dash, df_act, deal_id):
                 st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
         else:
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
-            
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
 # -----------------------------------------------------------------------------
 def main():
-    # Load Data
     df_dash_raw, df_act_raw = load_data()
-    
     if df_dash_raw.empty:
         st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
         st.stop()
-        
-    # Process
     df_dash, df_act = process_data(df_dash_raw, df_act_raw)
     
-    # Router
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
     else:
