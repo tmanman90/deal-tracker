@@ -448,6 +448,28 @@ def process_data(df_dash, df_act, df_deals):
     # ROBUST DATE CLEANING FOR ACTUALS
     if 'Period End Date' in df_act.columns:
         df_act['Period End Date'] = df_act['Period End Date'].apply(parse_flexible_date)
+        
+    # --- SMART START DATE LOGIC START ---
+    # Map Deal ID -> Earliest Actual Date
+    actual_starts = {}
+    if not df_act.empty and 'Period End Date' in df_act.columns:
+        # Drop NaTs just in case
+        valid_dates = df_act.dropna(subset=['Period End Date'])
+        if not valid_dates.empty:
+            actual_starts = valid_dates.groupby('Deal ID')['Period End Date'].min().to_dict()
+            
+    # Override Forecast Start Date in Dashboard
+    def smart_start_date(row):
+        did = str(row.get('Deal ID', '')).strip()
+        manual_date = row.get('Forecast Start Date')
+        
+        # Use Actuals if available, otherwise fallback to Manual
+        if did in actual_starts:
+            return actual_starts[did]
+        return manual_date
+        
+    df_dash['Forecast Start Date'] = df_dash.apply(smart_start_date, axis=1)
+    # --- SMART START DATE LOGIC END ---
     
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
@@ -821,15 +843,7 @@ def show_detail(df_dash, df_act, deal_id):
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
     
-    # --- TAGS IN TITLE ---
-    # Check for Tags and create badge if present
-    tag_val = str(deal_row.get('Tags', '')).strip()
-    tag_html = ""
-    if tag_val:
-        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
-
-    # Render Title with Tag
-    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
+    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -841,7 +855,7 @@ def show_detail(df_dash, df_act, deal_id):
     rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -900,6 +914,7 @@ def show_detail(df_dash, df_act, deal_id):
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
             is_legacy = deal_row.get('Is Legacy', False)
+            tag_val = str(deal_row.get('Tags', '')).upper()
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
@@ -908,12 +923,18 @@ def show_detail(df_dash, df_act, deal_id):
             
             legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
             
+            # Artist Type Line
+            artist_type_line = ""
+            if tag_val:
+                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
+            
             st.markdown(f"""
             <div class="diagnostic-box">
                 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
                 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
+                {artist_type_line}
                 {legacy_flag}
             </div>
             """, unsafe_allow_html=True)
