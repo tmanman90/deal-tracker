@@ -732,12 +732,11 @@ def show_detail(df_dash, df_act, deal_id):
                 
                 st.altair_chart(final_chart + rule_adv, use_container_width=True)
                 
-                # Legend / Key
+                # Legend / Key - UPDATED: Removed "Advance Target"
                 st.markdown("""
                 <div style="text-align: center; font-size: 0.8rem;">
                     <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
-                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span> &nbsp;&nbsp;
-                    <span style="color: white;">··· Advance Target</span>
+                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span>
                 </div>
                 """, unsafe_allow_html=True)
                 
