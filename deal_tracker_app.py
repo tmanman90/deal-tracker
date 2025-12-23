@@ -607,12 +607,20 @@ def show_detail(df_dash, df_act, deal_id):
         else:
             bar_color = '#33ff00' # Neon Green (B+, A, A+)
             
-        gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Recoupment'], 'color': [bar_color]})
+        # Add formatted text for the tooltip
+        gauge_df = pd.DataFrame({
+            'val': [chart_val], 
+            'label': ['Recoupment'], 
+            'color': [bar_color],
+            'Recoupment': [f"{actual_recoup*100:.1f}%"],
+            'Forecast': [f"{expected_recoup*100:.1f}%"]
+        })
         
         # Create Bar
         gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
             x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
-            color=alt.Color('color', scale=None, legend=None)
+            color=alt.Color('color', scale=None, legend=None),
+            tooltip=['label', 'Recoupment', 'Forecast']
         ).properties(height=80, title="RECOUPMENT METER")
         
         # Add Benchmark Line (Expected Progress)
