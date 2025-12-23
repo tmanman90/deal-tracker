@@ -276,19 +276,28 @@ def calculate_pace_metrics(row, count):
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # --- UPDATED GRADING BANDS (LESS HARSH) ---
+    # --- UPDATED GRADING BANDS (WITH PLUSES) ---
     # Target (Pace Ratio = 1.0) is the goal.
-    # A: >= 1.00 (At target or better)
-    # B: >= 0.85 (Close to target)
-    # C: >= 0.70 (Behind)
-    # D: >= 0.50 (Significantly behind)
-    # F: < 0.50
+    # A+: >= 1.10 (Beat target by 10%+)
+    # A:  >= 1.00 (At target)
+    # B+: >= 0.90 (Within 10% of target)
+    # B:  >= 0.80
+    # C+: >= 0.70
+    # C:  >= 0.60
+    # D:  >= 0.50
+    # F:  < 0.50
     
-    if pace_ratio >= 1.00:
+    if pace_ratio >= 1.10:
+        grade = "A+"
+    elif pace_ratio >= 1.00:
         grade = "A"
-    elif pace_ratio >= 0.85:
+    elif pace_ratio >= 0.90:
+        grade = "B+"
+    elif pace_ratio >= 0.80:
         grade = "B"
     elif pace_ratio >= 0.70:
+        grade = "C+"
+    elif pace_ratio >= 0.60:
         grade = "C"
     elif pace_ratio >= 0.50:
         grade = "D"
@@ -566,11 +575,11 @@ def show_detail(df_dash, df_act, deal_id):
         
         # Color logic based on new bands
         if chart_val < 0.70:
-            bar_color = 'red'
-        elif chart_val < 0.85:
-            bar_color = 'orange'
+            bar_color = 'red' # F, D, C
+        elif chart_val < 0.90:
+            bar_color = 'orange' # C+, B
         else:
-            bar_color = '#33ff00' # Neon Green
+            bar_color = '#33ff00' # Neon Green (B+, A, A+)
             
         gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Pace'], 'color': [bar_color]})
         gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
