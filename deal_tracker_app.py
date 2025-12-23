@@ -624,8 +624,8 @@ def show_detail(df_dash, df_act, deal_id):
         ).properties(height=80, title="RECOUPMENT METER")
         
         # Add Benchmark Line (Expected Progress)
-        # This shows where the bar SHOULD be
-        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[5, 5], size=2).encode(x='x')
+        # Increased size and changed color to make it more visible against dark background
+        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
         
         st.altair_chart(gauge + rule, use_container_width=True)
         
