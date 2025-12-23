@@ -215,22 +215,22 @@ def calculate_pace_metrics(row, count):
     """
     Calculates Grade and Pace based on Benchmark.
     Includes 'Ramp-up Curve' for first 4 months.
-    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months).
+    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress).
     """
     # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
-        return "N/A", 0.0, False, 0
+        return "N/A", 0.0, False, 0, 0.0
     
     # 2. Parse Dates
     try:
         if 'Forecast Start Date' not in row:
-             return "N/A", 0.0, False, 0
+             return "N/A", 0.0, False, 0, 0.0
              
         forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
-            return "N/A", 0.0, False, 0
+            return "N/A", 0.0, False, 0, 0.0
     except:
-        return "N/A", 0.0, False, 0
+        return "N/A", 0.0, False, 0, 0.0
         
     # 3. Calculate Elapsed Months vs Benchmark
     today = pd.Timestamp.now()
@@ -277,15 +277,6 @@ def calculate_pace_metrics(row, count):
         pace_ratio = actual_progress / expected_progress
         
     # --- UPDATED GRADING BANDS (WITH PLUSES) ---
-    # Target (Pace Ratio = 1.0) is the goal.
-    # A+: >= 1.10 (Beat target by 10%+)
-    # A:  >= 1.00 (At target)
-    # B+: >= 0.90 (Within 10% of target)
-    # B:  >= 0.80
-    # C+: >= 0.70
-    # C:  >= 0.60
-    # D:  >= 0.50
-    # F:  < 0.50
     
     if pace_ratio >= 1.10:
         grade = "A+"
@@ -304,7 +295,7 @@ def calculate_pace_metrics(row, count):
     else:
         grade = "F"
         
-    return grade, pace_ratio, True, elapsed_months
+    return grade, pace_ratio, True, elapsed_months, expected_progress
 
 # -----------------------------------------------------------------------------
 # DATA PROCESSING WRAPPER
@@ -350,6 +341,7 @@ def process_data(df_dash, df_act):
     is_eligible = []
     elapsed_list = []
     data_points_list = []
+    expected_list = [] # Store expected progress
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -357,18 +349,22 @@ def process_data(df_dash, df_act):
         # Get count (default 0)
         count = eligibility_map.get(did, 0)
         
-        g, r, e, el_m = calculate_pace_metrics(row, count)
+        # Now returns 5 values including exp_prog
+        g, r, e, el_m, exp_prog = calculate_pace_metrics(row, count)
+        
         grades.append(g)
         ratios.append(r)
         is_eligible.append(e)
         elapsed_list.append(el_m)
         data_points_list.append(count)
+        expected_list.append(exp_prog)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
     df_dash['Elapsed Months'] = elapsed_list
     df_dash['Data Points Found'] = data_points_list 
+    df_dash['Expected Recoupment'] = expected_list # New Column
     
     # Clean % to BE for display/sorting
     if '% to BE' in df_dash.columns:
@@ -594,6 +590,7 @@ def show_detail(df_dash, df_act, deal_id):
         if deal_row.get('Is Eligible', False):
             elapsed = deal_row.get('Elapsed Months', 0)
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
+            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 # From new column
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
@@ -603,6 +600,7 @@ def show_detail(df_dash, df_act, deal_id):
             st.info(f"""
             **DIAGNOSTIC:**
             Deal is {elapsed:.1f} months into cycle {note}.
+            Forecasted Recoupment: {expected_recoup_pct:.1f}%
             Actual Recoupment: {recoup_pct:.1f}%
             Pace Ratio: {pace_ratio:.2f}x
             """)
