@@ -454,15 +454,7 @@ def process_data(df_dash, df_act, df_deals):
     # ROBUST DATE CLEANING FOR ACTUALS
     if 'Period End Date' in df_act.columns:
         df_act['Period End Date'] = df_act['Period End Date'].apply(parse_flexible_date)
-    
-    # Determine "Latest Data Date" from Actuals
-    # This will be used as "Today" for calculating elapsed months
-    current_date_override = None
-    if not df_act.empty and 'Period End Date' in df_act.columns:
-         valid_dates_all = df_act.dropna(subset=['Period End Date'])
-         if not valid_dates_all.empty:
-             current_date_override = valid_dates_all['Period End Date'].max()
-
+        
     # --- SMART START DATE LOGIC START ---
     # Map Deal ID -> Earliest Actual Date (Snapped to 1st of Month)
     actual_starts = {}
@@ -489,6 +481,14 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Forecast Start Date'] = df_dash.apply(smart_start_date, axis=1)
     # --- SMART START DATE LOGIC END ---
     
+    # Determine "Latest Data Date" from Actuals
+    # This will be used as "Today" for calculating elapsed months
+    current_date_override = None
+    if not df_act.empty and 'Period End Date' in df_act.columns:
+         valid_dates_all = df_act.dropna(subset=['Period End Date'])
+         if not valid_dates_all.empty:
+             current_date_override = valid_dates_all['Period End Date'].max()
+
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
     for col in numeric_cols:
@@ -879,7 +879,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
