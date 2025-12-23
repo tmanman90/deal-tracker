@@ -216,20 +216,11 @@ def load_data():
         ws_act = sh.worksheet("ACTUALS")
         df_act = safe_read_sheet(ws_act)
         
-        # 3. READ DEALS (For Analyzer Data)
-        # We need to merge this info in because DASHBOARD might not have all columns yet
-        # or we want to check for 'Selected Strategy' etc explicitly
-        try:
-            ws_deals = sh.worksheet("DEALS")
-            df_deals = safe_read_sheet(ws_deals)
-        except:
-            df_deals = pd.DataFrame() # Fallback if sheet missing
-        
-        return df_dash, df_act, df_deals
+        return df_dash, df_act
         
     except Exception as e:
         st.error(f"SYSTEM FAILURE: Connection Refused. {str(e)}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
 # -----------------------------------------------------------------------------
 # CLEANING & LOGIC UTILS
@@ -288,64 +279,28 @@ def parse_flexible_date(date_str):
     # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
 
-def calculate_pace_metrics(row, count, deal_meta=None):
+def calculate_pace_metrics(row, count):
     """
     Calculates Grade and Pace based on Benchmark.
     Includes 'Ramp-up Curve' for first 4 months.
-    Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
-    
-    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag).
+    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress).
     """
     # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
-        return "N/A", 0.0, False, 0, 0.0, False
+        return "N/A", 0.0, False, 0, 0.0
     
-    # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
-    # Check if we have analyzer data. 
-    # We look for 'Selected Advance' or 'Selected Strategy'.
-    # If using df_dash directly, these columns might not be there, so we rely on what was merged or defaults.
-    
-    target_amount = 0.0
-    target_months = 12.0 # Default
-    is_legacy = False
-    
-    # Check if we have specific "Selected Advance" from Analyzer
-    # Note: 'Selected Advance' might be in row if we merged it, or we might need to check logic.
-    # For now, let's assume if 'Selected Strategy' is missing/empty, it's legacy.
-    
-    strat = str(row.get('Selected Strategy', '')).strip()
-    sel_adv = row.get('Selected Advance', '')
-    
-    if not strat or pd.isna(sel_adv) or str(sel_adv).strip() == "":
-        # LEGACY MODE
-        is_legacy = True
-        # Use Executed Advance as the target
-        target_amount = clean_currency(row.get('Executed Advance', 0))
-        target_months = 12.0
-    else:
-        # ANALYZER MODE
-        is_legacy = False
-        target_amount = clean_currency(sel_adv)
-        # Use Label Breakeven Months if available, else 12
-        lbm = row.get('Label Breakeven Months', 12)
-        try:
-            target_months = float(lbm)
-            if target_months <= 0: target_months = 12.0
-        except:
-            target_months = 12.0
-
-    # 3. Parse Dates
+    # 2. Parse Dates
     try:
         if 'Forecast Start Date' not in row:
-             return "N/A", 0.0, False, 0, 0.0, False
+             return "N/A", 0.0, False, 0, 0.0
              
         forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
-            return "N/A", 0.0, False, 0, 0.0, False
+            return "N/A", 0.0, False, 0, 0.0
     except:
-        return "N/A", 0.0, False, 0, 0.0, False
+        return "N/A", 0.0, False, 0, 0.0
         
-    # 4. Calculate Elapsed Months vs Benchmark
+    # 3. Calculate Elapsed Months vs Benchmark
     today = pd.Timestamp.now()
     if forecast_start > today:
         elapsed_months = 0 
@@ -355,39 +310,28 @@ def calculate_pace_metrics(row, count, deal_meta=None):
     elapsed_months = max(0.1, elapsed_months)
     
     # --- RAMP-UP CURVE LOGIC (TIGHTENED v2) ---
-    # Only applies if target_months is roughly 12. If it's a 36 month deal, scaling needs adjustment.
-    # For simplicity, we scale the curve based on target_months ratio if not 12.
-    # But usually, 12 is the standard benchmark for "Pace".
-    
-    # Standard linear expectation would be: elapsed / target_months
-    # We apply the curve modifier only to the first few months relative to a 12-month standard.
-    
-    linear_progress = elapsed_months / target_months
-    
-    # Apply curve dampener for early months (only if within first 4 months)
-    # The curve logic below effectively says "Expect less in M1-M4"
-    # We can model this by reducing the linear_progress by a factor
+    # Denominators: 20 (M1), 18 (M2), 14 (M3), 12 (M4 - Full Speed)
+    # This ramps up to full speed (12) by Month 4 as requested.
     
     if elapsed_months <= 1.5:
-        # M1: Expect 1/20 instead of 1/12 -> factor of (12/20) = 0.6
-        curve_factor = 0.6
+        # Month 1: Expect 1/20th pace
+        expected_progress = elapsed_months / 20.0
     elif elapsed_months <= 2.5:
-        # M2: Expect 2/18 instead of 2/12 -> factor of (12/18) = 0.66
-        curve_factor = 0.66
+        # Month 2: Expect 2/18th pace
+        expected_progress = elapsed_months / 18.0
     elif elapsed_months <= 3.5:
-        # M3: Expect 3/14 instead of 3/12 -> factor of (12/14) = 0.85
-        curve_factor = 0.85
+        # Month 3: Expect 3/14th pace
+        expected_progress = elapsed_months / 14.0
     else:
-        curve_factor = 1.0
-        
-    expected_progress = linear_progress * curve_factor
+        # Month 4+: Standard linear expectation (x/12) - Full Speed
+        expected_progress = elapsed_months / 12.0
+
+    # Cap expectation at 1.0 (100%)
     expected_progress = min(1.0, expected_progress)
     
-    # 5. Actual progress
-    # Recoupment % is Cumulative / Target Amount (which might be Executed Advance or Selected Advance)
-    cum_receipts = clean_currency(row.get('Cum Receipts', 0))
-    if target_amount > 0:
-        actual_progress = cum_receipts / target_amount
+    # Actual progress
+    if '% to BE' in row:
+        actual_progress = clean_percent(row['% to BE'])
     else:
         actual_progress = 0.0
     
@@ -398,48 +342,41 @@ def calculate_pace_metrics(row, count, deal_meta=None):
         pace_ratio = actual_progress / expected_progress
         
     # --- GRADING BANDS ---
-    if pace_ratio >= 1.10: grade = "A+"
-    elif pace_ratio >= 1.00: grade = "A"
-    elif pace_ratio >= 0.90: grade = "B+"
-    elif pace_ratio >= 0.80: grade = "B"
-    elif pace_ratio >= 0.70: grade = "C+"
-    elif pace_ratio >= 0.60: grade = "C"
-    elif pace_ratio >= 0.50: grade = "D"
-    else: grade = "F"
+    # A+: >= 1.10
+    # A:  >= 1.00
+    # B+: >= 0.90
+    # B:  >= 0.80
+    # C+: >= 0.70
+    # C:  >= 0.60
+    # D:  >= 0.50
+    # F:  < 0.50
+    
+    if pace_ratio >= 1.10:
+        grade = "A+"
+    elif pace_ratio >= 1.00:
+        grade = "A"
+    elif pace_ratio >= 0.90:
+        grade = "B+"
+    elif pace_ratio >= 0.80:
+        grade = "B"
+    elif pace_ratio >= 0.70:
+        grade = "C+"
+    elif pace_ratio >= 0.60:
+        grade = "C"
+    elif pace_ratio >= 0.50:
+        grade = "D"
+    else:
+        grade = "F"
         
-    return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy
+    return grade, pace_ratio, True, elapsed_months, expected_progress
 
 # -----------------------------------------------------------------------------
 # DATA PROCESSING WRAPPER
 # -----------------------------------------------------------------------------
-def process_data(df_dash, df_act, df_deals):
+def process_data(df_dash, df_act):
     # Ensure required columns exist
-    if df_dash.empty:
+    if df_dash.empty or df_act.empty:
         return df_dash, df_act
-
-    # MERGE DEALS DATA INTO DASHBOARD IF AVAILABLE
-    # This brings in 'Selected Strategy', 'Selected Advance', etc.
-    if not df_deals.empty:
-        # Normalize IDs for merge
-        df_dash['Deal ID Str'] = df_dash['Deal ID'].astype(str).str.strip()
-        df_deals['Deal ID Str'] = df_deals['Deal ID'].astype(str).str.strip()
-        
-        # Columns to bring over if they don't exist in dashboard
-        cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months']
-        cols_existing = [c for c in cols_to_merge if c in df_deals.columns]
-        
-        if cols_existing:
-            # Drop them from dash if they exist to avoid suffix issues, or just update
-            # Simpler to merge onto a copy
-            df_merged = df_dash.merge(df_deals[['Deal ID Str'] + cols_existing], on='Deal ID Str', how='left', suffixes=('', '_y'))
-            
-            # Clean up suffixes if any collision occurred
-            for c in cols_existing:
-                if f'{c}_y' in df_merged.columns:
-                    df_merged[c] = df_merged[f'{c}_y'].fillna(df_merged[c])
-                    df_merged.drop(columns=[f'{c}_y'], inplace=True)
-            
-            df_dash = df_merged
 
     # 1. GLOBAL STRIP: Clean Deal IDs
     if 'Deal ID' in df_act.columns:
@@ -477,8 +414,7 @@ def process_data(df_dash, df_act, df_deals):
     is_eligible = []
     elapsed_list = []
     data_points_list = []
-    expected_list = []
-    legacy_list = []
+    expected_list = [] # Store expected progress
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -486,8 +422,8 @@ def process_data(df_dash, df_act, df_deals):
         # Get count (default 0)
         count = eligibility_map.get(did, 0)
         
-        # Now returns 6 values including is_legacy
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count)
+        # Now returns 5 values including exp_prog
+        g, r, e, el_m, exp_prog = calculate_pace_metrics(row, count)
         
         grades.append(g)
         ratios.append(r)
@@ -495,30 +431,19 @@ def process_data(df_dash, df_act, df_deals):
         elapsed_list.append(el_m)
         data_points_list.append(count)
         expected_list.append(exp_prog)
-        legacy_list.append(is_leg)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
     df_dash['Elapsed Months'] = elapsed_list
     df_dash['Data Points Found'] = data_points_list 
-    df_dash['Expected Recoupment'] = expected_list
-    df_dash['Is Legacy'] = legacy_list # New Flag
+    df_dash['Expected Recoupment'] = expected_list # New Column
     
-    # Recalculate '% to BE Clean' based on the specific target used (Adv or Selected Adv)
-    # This ensures the dashboard reflects the same logic as the grade
-    # We iterate again or vectorise. Vectorized is cleaner.
-    
-    # Logic: If Legacy, Target = Executed Advance. If Not, Target = Selected Advance.
-    def get_target(r):
-        if r['Is Legacy']:
-            return clean_currency(r.get('Executed Advance', 0))
-        else:
-            sel = clean_currency(r.get('Selected Advance', 0))
-            return sel if sel > 0 else clean_currency(r.get('Executed Advance', 0))
-            
-    df_dash['Target Amount'] = df_dash.apply(get_target, axis=1)
-    df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
+    # Clean % to BE for display/sorting
+    if '% to BE' in df_dash.columns:
+        df_dash['% to BE Clean'] = df_dash['% to BE'].apply(clean_percent)
+    else:
+        df_dash['% to BE Clean'] = 0.0
     
     return df_dash, df_act
 
@@ -558,9 +483,6 @@ def show_portfolio(df_dash, df_act):
     st.markdown(ticker_html, unsafe_allow_html=True)
     
     st.markdown("---")
-    
-    # --- MARKET PULSE (Moved to Bottom) ---
-    # (Code moved below Roster Table)
     
     # --- FILTERS ---
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -621,7 +543,7 @@ def show_portfolio(df_dash, df_act):
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
-    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5) # Added 5th column
     
     kpi1.metric("ACTIVE DEALS", len(filtered))
     
@@ -640,9 +562,11 @@ def show_portfolio(df_dash, df_act):
         
     # Weighted Grade Calculation
     if total_adv > 0 and 'Pace Ratio' in filtered.columns and 'Is Eligible' in filtered.columns:
+        # Filter for eligible deals only for grade calculation
         eligible_deals = filtered[filtered['Is Eligible'] == True]
         
         if not eligible_deals.empty:
+            # Weighted Score = Pace Ratio * Advance
             eligible_deals['Weighted Score'] = eligible_deals['Pace Ratio'] * eligible_deals['Executed Advance']
             
             total_eligible_adv = eligible_deals['Executed Advance'].sum()
@@ -651,6 +575,7 @@ def show_portfolio(df_dash, df_act):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
+                # Convert Ratio to Grade using same logic as per deal
                 if overall_ratio >= 1.10: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
@@ -745,14 +670,13 @@ def show_portfolio(df_dash, df_act):
                     deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
                     
                     # Calculate Normalized Month & Cumulative % Recouped
-                    # We need the Target Amount from df_dash for this Deal ID
-                    # IMPORTANT: Use the new 'Target Amount' column which handles Legacy logic
+                    # We need the Advance amount from df_dash for this Deal ID
                     adv_row = df_dash[df_dash['Deal ID'] == did]
                     if not adv_row.empty:
-                        target_amt = adv_row.iloc[0].get('Target Amount', 0)
-                        if target_amt > 0:
+                        advance = adv_row.iloc[0]['Executed Advance']
+                        if advance > 0:
                             deal_subset['CumNet'] = deal_subset['Net Receipts'].cumsum()
-                            deal_subset['PctRecouped'] = deal_subset['CumNet'] / target_amt
+                            deal_subset['PctRecouped'] = deal_subset['CumNet'] / advance
                             
                             # Add to master list
                             for i, (idx, row) in enumerate(deal_subset.iterrows()):
@@ -931,23 +855,18 @@ def show_detail(df_dash, df_act, deal_id):
             elapsed = deal_row.get('Elapsed Months', 0)
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
-            is_legacy = deal_row.get('Is Legacy', False)
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
             else:
                  note = "(Linear)"
-            
-            # Add visual indicator for Legacy deals
-            legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
-            
+                 
             st.markdown(f"""
             <div class="diagnostic-box">
                 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
                 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
                 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
-                {legacy_flag}
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -1065,11 +984,11 @@ def show_detail(df_dash, df_act, deal_id):
 # MAIN APP LOOP
 # -----------------------------------------------------------------------------
 def main():
-    df_dash_raw, df_act_raw, df_deals_raw = load_data()
+    df_dash_raw, df_act_raw = load_data()
     if df_dash_raw.empty:
         st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
         st.stop()
-    df_dash, df_act = process_data(df_dash_raw, df_act_raw, df_deals_raw)
+    df_dash, df_act = process_data(df_dash_raw, df_act_raw)
     
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
