@@ -127,7 +127,9 @@ def load_data():
             if not data:
                 return pd.DataFrame()
             
-            headers = data[0]
+            # Clean headers: strip whitespace to avoid key errors (e.g. "Artist " -> "Artist")
+            headers = [str(h).strip() for h in data[0]]
+            
             # Create DF from raw data
             df = pd.DataFrame(data[1:], columns=headers)
             
@@ -193,6 +195,10 @@ def calculate_pace_metrics(row, data_months_count):
     
     # 2. Parse Dates
     try:
+        # Check if 'Forecast Start Date' exists
+        if 'Forecast Start Date' not in row:
+             return "N/A", 0.0, False, 0
+             
         forecast_start = pd.to_datetime(row['Forecast Start Date'])
         if pd.isna(forecast_start):
             return "N/A", 0.0, False, 0
@@ -214,7 +220,10 @@ def calculate_pace_metrics(row, data_months_count):
     expected_progress = min(1.0, elapsed_months / 12.0)
     
     # Actual progress
-    actual_progress = clean_percent(row['% to BE'])
+    if '% to BE' in row:
+        actual_progress = clean_percent(row['% to BE'])
+    else:
+        actual_progress = 0.0
     
     # Pace Ratio
     if expected_progress == 0:
@@ -245,25 +254,32 @@ def process_data(df_dash, df_act):
         return df_dash, df_act
 
     # Process Actuals Dates & Values
-    df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
-    df_act['Period End Date'] = pd.to_datetime(df_act['Period End Date'], errors='coerce')
+    if 'Net Receipts' in df_act.columns:
+        df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
+    if 'Period End Date' in df_act.columns:
+        df_act['Period End Date'] = pd.to_datetime(df_act['Period End Date'], errors='coerce')
     
     # Clean Dashboard Numerics
-    df_dash['Executed Advance'] = df_dash['Executed Advance'].apply(clean_currency)
-    df_dash['Cum Receipts'] = df_dash['Cum Receipts'].apply(clean_currency)
-    df_dash['Remaining to BE'] = df_dash['Remaining to BE'].apply(clean_currency)
+    numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
+    for col in numeric_cols:
+        if col in df_dash.columns:
+            df_dash[col] = df_dash[col].apply(clean_currency)
+        else:
+            df_dash[col] = 0.0
     
     # Calculate Data Eligibility (Distinct Months per Deal)
     # Group by Deal ID, convert date to period 'M' to count unique months
     eligibility_map = {}
     if not df_act.empty:
-        temp = df_act.dropna(subset=['Period End Date']).copy()
-        temp['MonthPeriod'] = temp['Period End Date'].dt.to_period('M')
-        if 'Deal ID' in temp.columns:
-            # Clean Deal ID to string to ensure matching
-            temp['Deal ID'] = temp['Deal ID'].astype(str)
-            counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
-            eligibility_map = counts.to_dict()
+        # Check for necessary cols
+        if 'Period End Date' in df_act.columns:
+            temp = df_act.dropna(subset=['Period End Date']).copy()
+            temp['MonthPeriod'] = temp['Period End Date'].dt.to_period('M')
+            if 'Deal ID' in temp.columns:
+                # Clean Deal ID to string to ensure matching
+                temp['Deal ID'] = temp['Deal ID'].astype(str)
+                counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
+                eligibility_map = counts.to_dict()
     
     # Enrich Dashboard with Grades
     grades = []
@@ -272,7 +288,8 @@ def process_data(df_dash, df_act):
     elapsed_list = []
     
     for _, row in df_dash.iterrows():
-        did = str(row['Deal ID'])
+        # Handle missing Deal ID column gracefully
+        did = str(row.get('Deal ID', ''))
         months_count = eligibility_map.get(did, 0) # default 0 if no actuals
         g, r, e, el_m = calculate_pace_metrics(row, months_count)
         grades.append(g)
@@ -286,7 +303,10 @@ def process_data(df_dash, df_act):
     df_dash['Elapsed Months'] = elapsed_list
     
     # Clean % to BE for display/sorting
-    df_dash['% to BE Clean'] = df_dash['% to BE'].apply(clean_percent)
+    if '% to BE' in df_dash.columns:
+        df_dash['% to BE Clean'] = df_dash['% to BE'].apply(clean_percent)
+    else:
+        df_dash['% to BE Clean'] = 0.0
     
     return df_dash, df_act
 
@@ -318,12 +338,15 @@ def show_portfolio(df_dash):
     filtered = df_dash.copy()
     
     if search:
-        filtered = filtered[
-            filtered['Artist / Project'].astype(str).str.lower().str.contains(search) | 
-            filtered['Deal ID'].astype(str).str.lower().str.contains(search)
-        ]
+        # Safe filter
+        mask = pd.Series([False] * len(filtered))
+        if 'Artist / Project' in filtered.columns:
+            mask = mask | filtered['Artist / Project'].astype(str).str.lower().str.contains(search)
+        if 'Deal ID' in filtered.columns:
+            mask = mask | filtered['Deal ID'].astype(str).str.lower().str.contains(search)
+        filtered = filtered[mask]
         
-    if status_filter:
+    if status_filter and 'Status' in filtered.columns:
         filtered = filtered[filtered['Status'].isin(status_filter)]
         
     if eligible_only:
@@ -331,23 +354,24 @@ def show_portfolio(df_dash):
         
     # Sort Logic
     ascending = False
+    sort_col = None
+    
     if sort_opt == "Remaining to BE":
         sort_col = "Remaining to BE"
     elif sort_opt == "% to BE":
         sort_col = "% to BE Clean"
     elif sort_opt == "Grade":
-        # Sort Grade alphabetically (A is 'smaller' than B, so ascending=True brings A to top)
         sort_col = "Grade"
         ascending = True
     elif sort_opt == "Cum Receipts":
         sort_col = "Cum Receipts"
-    else:
-        sort_col = "Delta Months" # Assuming this exists or handled
-        # Clean Delta Months just in case
-        if "Delta Months" in filtered.columns:
-            filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
+    elif sort_opt == "Delta Months":
+         sort_col = "Delta Months"
 
-    if sort_col in filtered.columns:
+    if sort_col and sort_col in filtered.columns:
+        # Special handling for Delta Months numeric conversion
+        if sort_col == "Delta Months":
+             filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
@@ -355,10 +379,10 @@ def show_portfolio(df_dash):
     
     kpi1.metric("ACTIVE DEALS", len(filtered))
     
-    total_adv = filtered['Executed Advance'].sum()
+    total_adv = filtered['Executed Advance'].sum() if 'Executed Advance' in filtered.columns else 0
     kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
     
-    total_rec = filtered['Cum Receipts'].sum()
+    total_rec = filtered['Cum Receipts'].sum() if 'Cum Receipts' in filtered.columns else 0
     kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
     
     # Weighted % to BE (Total Rec / Total Adv)
@@ -405,17 +429,25 @@ def show_portfolio(df_dash):
     if len(event.selection.rows) > 0:
         row_idx = event.selection.rows[0]
         # Get the actual Deal ID from the filtered dataframe
-        selected_deal_id = filtered.iloc[row_idx]['Deal ID']
-        st.session_state['selected_deal_id'] = selected_deal_id
-        st.rerun()
+        if 'Deal ID' in filtered.columns:
+            selected_deal_id = filtered.iloc[row_idx]['Deal ID']
+            st.session_state['selected_deal_id'] = selected_deal_id
+            st.rerun()
 
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
 def show_detail(df_dash, df_act, deal_id):
     # Ensure ID match is string-safe
+    if 'Deal ID' not in df_dash.columns:
+        st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
+        return
+
     df_dash['Deal ID'] = df_dash['Deal ID'].astype(str)
-    df_act['Deal ID'] = df_act['Deal ID'].astype(str)
+    
+    if 'Deal ID' in df_act.columns:
+        df_act['Deal ID'] = df_act['Deal ID'].astype(str)
+        
     deal_id = str(deal_id)
 
     # Get Deal Data
@@ -431,14 +463,22 @@ def show_detail(df_dash, df_act, deal_id):
     deal_row = deal_subset.iloc[0]
     
     # Deal Specific Actuals
-    deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
+    deal_act = pd.DataFrame()
+    if not df_act.empty and 'Deal ID' in df_act.columns:
+        deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
     
     # --- NAVIGATION ---
     if st.button("<< RETURN TO DASHBOARD"):
         del st.session_state['selected_deal_id']
         st.rerun()
         
-    st.title(f"// ANALYZING: {deal_row['Artist / Project']} [{deal_id}]")
+    # SAFE ARTIST NAME EXTRACTION
+    # Tries 'Artist / Project', then 'Artist', then 'Project', else 'Unknown'
+    artist_name = deal_row.get('Artist / Project', 
+                  deal_row.get('Artist', 
+                  deal_row.get('Project', 'UNKNOWN ARTIST')))
+    
+    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -446,16 +486,26 @@ def show_detail(df_dash, df_act, deal_id):
     # Formatting helper
     grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
     
-    row1_c1.metric("STATUS", deal_row['Status'])
+    # Safely get values with .get() to prevent KeyError
+    status_val = deal_row.get('Status', '-')
+    adv_val = deal_row.get('Executed Advance', 0)
+    pct_val = deal_row.get('% to BE Clean', 0) * 100
+    
+    cum_val = deal_row.get('Cum Receipts', 0)
+    rem_val = deal_row.get('Remaining to BE', 0)
+    start_date = deal_row.get('Forecast Start Date', '-')
+    be_date = deal_row.get('Predicted BE Date', '-')
+
+    row1_c1.metric("STATUS", status_val)
     row1_c2.metric("PERFORMANCE GRADE", grade_display, delta_color="normal")
-    row1_c3.metric("EXECUTED ADVANCE", f"${deal_row['Executed Advance']:,.0f}")
-    row1_c4.metric("% RECOUPED", f"{deal_row['% to BE Clean']*100:.1f}%")
+    row1_c3.metric("EXECUTED ADVANCE", f"${adv_val:,.0f}")
+    row1_c4.metric("% RECOUPED", f"{pct_val:.1f}%")
 
     row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
-    row2_c1.metric("CUM RECEIPTS", f"${deal_row['Cum Receipts']:,.0f}")
-    row2_c2.metric("REMAINING", f"${deal_row['Remaining to BE']:,.0f}")
-    row2_c3.metric("FORECAST START", str(deal_row['Forecast Start Date']))
-    row2_c4.metric("EST BREAKEVEN", str(deal_row['Predicted BE Date']))
+    row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
+    row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
+    row2_c3.metric("FORECAST START", str(start_date))
+    row2_c4.metric("EST BREAKEVEN", str(be_date))
 
     st.markdown("---")
 
@@ -466,7 +516,7 @@ def show_detail(df_dash, df_act, deal_id):
     
     with col_gauge:
         # Create a simple gauge chart using Altair
-        pace_ratio = deal_row['Pace Ratio']
+        pace_ratio = deal_row.get('Pace Ratio', 0)
         
         # Clamp for visualization
         chart_val = min(2.0, max(0.0, pace_ratio))
@@ -493,12 +543,14 @@ def show_detail(df_dash, df_act, deal_id):
         st.altair_chart(gauge + rule, use_container_width=True)
         
     with col_stats:
-        if deal_row['Is Eligible']:
+        if deal_row.get('Is Eligible', False):
+            elapsed = deal_row.get('Elapsed Months', 0)
+            recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             st.info(f"""
             **DIAGNOSTIC:**
-            Deal is {deal_row['Elapsed Months']:.1f} months into cycle (Benchmark: 12.0).
-            Expected Recoupment: {min(100, (deal_row['Elapsed Months']/12)*100):.1f}%
-            Actual Recoupment: {deal_row['% to BE Clean']*100:.1f}%
+            Deal is {elapsed:.1f} months into cycle (Benchmark: 12.0).
+            Expected Recoupment: {min(100, (elapsed/12)*100):.1f}%
+            Actual Recoupment: {recoup_pct:.1f}%
             Pace Ratio: {pace_ratio:.2f}x
             """)
         else:
@@ -510,17 +562,22 @@ def show_detail(df_dash, df_act, deal_id):
     if not deal_act.empty:
         # Prepare Data for Charts
         # Sort by date
-        deal_act = deal_act.sort_values('Period End Date')
+        if 'Period End Date' in deal_act.columns:
+            deal_act = deal_act.sort_values('Period End Date')
         
         # Normalize Date to "M#"
         deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
         deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
         
         # Calculate Cumulative
-        deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
-        
-        # Rolling Average (3 months)
-        deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
+        if 'Net Receipts' in deal_act.columns:
+            deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
+            # Rolling Average (3 months)
+            deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
+        else:
+            deal_act['CumNet'] = 0
+            deal_act['Rolling3'] = 0
+            deal_act['Net Receipts'] = 0
         
         c1, c2 = st.columns(2)
         
@@ -529,7 +586,7 @@ def show_detail(df_dash, df_act, deal_id):
             bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
                 x=alt.X('MonthLabel', sort=None, title='Period'),
                 y=alt.Y('Net Receipts', title='Net Receipts'),
-                tooltip=['MonthLabel', 'Net Receipts', 'Period End Date']
+                tooltip=['MonthLabel', 'Net Receipts', 'Period End Date'] if 'Period End Date' in deal_act.columns else ['MonthLabel', 'Net Receipts']
             ).properties(title="MONTHLY ACTUALS")
             st.altair_chart(bar, use_container_width=True)
             
@@ -542,7 +599,6 @@ def show_detail(df_dash, df_act, deal_id):
             )
             
             # Advance Line
-            adv_val = deal_row['Executed Advance']
             rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='#ffbf00', strokeDash=[4, 4]).encode(y='y')
             
             st.altair_chart(line + rule_adv, use_container_width=True)
@@ -551,7 +607,7 @@ def show_detail(df_dash, df_act, deal_id):
         st.markdown("### > TERMINAL FORECAST")
         
         last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
-        remaining = deal_row['Remaining to BE']
+        remaining = rem_val
         
         if remaining <= 0:
             st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
