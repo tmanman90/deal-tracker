@@ -286,11 +286,12 @@ def parse_flexible_date(date_str):
     # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
 
-def calculate_pace_metrics(row, count, deal_meta=None):
+def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None):
     """
     Calculates Grade and Pace based on Benchmark.
     Includes 'Ramp-up Curve' for first 4 months.
     Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
+    Uses current_date_override (latest data date) as 'today' for month calculation.
     
     Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag).
     """
@@ -298,19 +299,26 @@ def calculate_pace_metrics(row, count, deal_meta=None):
     if count < 3:
         return "N/A", 0.0, False, 0, 0.0, False
     
-    # 2. Determine Timeline (Target Months)
-    # Check if we have analyzer data. 
+    # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
+    
+    target_amount = 0.0
     target_months = 12.0 # Default
     is_legacy = False
     
+    # Strategy & Selected Advance from DEALS sheet (merged)
     strat = str(row.get('Selected Strategy', '')).strip()
     sel_adv_raw = row.get('Selected Advance', '')
     sel_adv = clean_currency(sel_adv_raw)
     
-    # Check if deal is analyzed (has strategy and selected advance)
+    # Explicit Logic:
+    # If we have a Strategy AND a valid Selected Advance > 0, it is an ANALYZER deal.
+    # Otherwise, it is a LEGACY deal.
+    
     if strat and sel_adv > 0:
         # ANALYZER MODE
         is_legacy = False
+        target_amount = sel_adv
+        
         # Use Label Breakeven Months if available, else 12
         lbm = row.get('Label Breakeven Months', 12)
         try:
@@ -324,6 +332,8 @@ def calculate_pace_metrics(row, count, deal_meta=None):
     else:
         # LEGACY MODE
         is_legacy = True
+        # Use Executed Advance as the target
+        target_amount = clean_currency(row.get('Executed Advance', 0))
         target_months = 12.0
 
     # 3. Parse Dates
@@ -337,14 +347,19 @@ def calculate_pace_metrics(row, count, deal_meta=None):
     except:
         return "N/A", 0.0, False, 0, 0.0, False
         
-    # 4. Calculate Elapsed Months vs Benchmark
-    today = pd.Timestamp.now()
-    if forecast_start > today:
-        elapsed_months = 0 
-    else:
-        elapsed_months = (today - forecast_start).days / 30.4375
+    # 4. Calculate Elapsed Months vs Benchmark (Whole Months Logic)
+    # Use override date (latest actuals date) if provided, else today
+    today = current_date_override if current_date_override else pd.Timestamp.now()
     
-    elapsed_months = max(0.1, elapsed_months)
+    if forecast_start > today:
+        elapsed_months = 0.0
+    else:
+        # Whole Month Calculation: (YearDiff * 12) + MonthDiff + 1 (inclusive)
+        # e.g. Dec 2025 - Oct 2025 = (0 * 12) + (12 - 10) + 1 = 3 Months
+        month_diff = (today.year - forecast_start.year) * 12 + (today.month - forecast_start.month)
+        elapsed_months = float(month_diff + 1)
+    
+    elapsed_months = max(1.0, elapsed_months)
     
     # --- RAMP-UP CURVE LOGIC (TIGHTENED v2) ---
     linear_progress = elapsed_months / target_months
@@ -439,7 +454,15 @@ def process_data(df_dash, df_act, df_deals):
     # ROBUST DATE CLEANING FOR ACTUALS
     if 'Period End Date' in df_act.columns:
         df_act['Period End Date'] = df_act['Period End Date'].apply(parse_flexible_date)
-        
+    
+    # Determine "Latest Data Date" from Actuals
+    # This will be used as "Today" for calculating elapsed months
+    current_date_override = None
+    if not df_act.empty and 'Period End Date' in df_act.columns:
+         valid_dates_all = df_act.dropna(subset=['Period End Date'])
+         if not valid_dates_all.empty:
+             current_date_override = valid_dates_all['Period End Date'].max()
+
     # --- SMART START DATE LOGIC START ---
     # Map Deal ID -> Earliest Actual Date (Snapped to 1st of Month)
     actual_starts = {}
@@ -498,7 +521,8 @@ def process_data(df_dash, df_act, df_deals):
         count = eligibility_map.get(did, 0)
         
         # Now returns 6 values including is_legacy
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count)
+        # Pass current_date_override to fix "fractional month" issue
+        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override)
         
         grades.append(g)
         ratios.append(r)
@@ -855,7 +879,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
