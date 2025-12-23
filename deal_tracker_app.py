@@ -102,12 +102,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AUTH & DATA LOADING
+# AUTH & DATA LOADING (UPDATED TO FIX HEADER ERROR)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
     """
     Connects to Google Sheets via Secrets and returns cleaned DataFrames.
+    Uses 'safe read' to ignore empty columns causing duplicate header errors.
     """
     try:
         # Load Secrets
@@ -119,14 +120,31 @@ def load_data():
         
         # Open Workbook
         sh = client.open_by_key(sheet_id)
+
+        # HELPER: Safe read that drops empty columns
+        def safe_read_sheet(ws):
+            data = ws.get_all_values()
+            if not data:
+                return pd.DataFrame()
+            
+            headers = data[0]
+            # Create DF from raw data
+            df = pd.DataFrame(data[1:], columns=headers)
+            
+            # Remove any columns that have an empty string as a header
+            # This fixes "duplicate header" errors from trailing empty columns
+            if '' in df.columns:
+                df = df.drop(columns=[''], axis=1)
+                
+            return df
         
         # 1. READ DASHBOARD
         ws_dash = sh.worksheet("DASHBOARD")
-        df_dash = pd.DataFrame(ws_dash.get_all_records())
+        df_dash = safe_read_sheet(ws_dash)
         
         # 2. READ ACTUALS
         ws_act = sh.worksheet("ACTUALS")
-        df_act = pd.DataFrame(ws_act.get_all_records())
+        df_act = safe_read_sheet(ws_act)
         
         return df_dash, df_act
         
@@ -222,6 +240,10 @@ def calculate_pace_metrics(row, data_months_count):
 # DATA PROCESSING WRAPPER
 # -----------------------------------------------------------------------------
 def process_data(df_dash, df_act):
+    # Ensure required columns exist
+    if df_dash.empty or df_act.empty:
+        return df_dash, df_act
+
     # Process Actuals Dates & Values
     df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
     df_act['Period End Date'] = pd.to_datetime(df_act['Period End Date'], errors='coerce')
@@ -237,8 +259,11 @@ def process_data(df_dash, df_act):
     if not df_act.empty:
         temp = df_act.dropna(subset=['Period End Date']).copy()
         temp['MonthPeriod'] = temp['Period End Date'].dt.to_period('M')
-        counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
-        eligibility_map = counts.to_dict()
+        if 'Deal ID' in temp.columns:
+            # Clean Deal ID to string to ensure matching
+            temp['Deal ID'] = temp['Deal ID'].astype(str)
+            counts = temp.groupby('Deal ID')['MonthPeriod'].nunique()
+            eligibility_map = counts.to_dict()
     
     # Enrich Dashboard with Grades
     grades = []
@@ -388,8 +413,22 @@ def show_portfolio(df_dash):
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
 def show_detail(df_dash, df_act, deal_id):
+    # Ensure ID match is string-safe
+    df_dash['Deal ID'] = df_dash['Deal ID'].astype(str)
+    df_act['Deal ID'] = df_act['Deal ID'].astype(str)
+    deal_id = str(deal_id)
+
     # Get Deal Data
-    deal_row = df_dash[df_dash['Deal ID'] == deal_id].iloc[0]
+    deal_subset = df_dash[df_dash['Deal ID'] == deal_id]
+    
+    if deal_subset.empty:
+        st.error(f"ERROR: Deal ID {deal_id} not found in DASHBOARD.")
+        if st.button("RESET"):
+            del st.session_state['selected_deal_id']
+            st.rerun()
+        return
+
+    deal_row = deal_subset.iloc[0]
     
     # Deal Specific Actuals
     deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
@@ -537,6 +576,7 @@ def main():
     df_dash_raw, df_act_raw = load_data()
     
     if df_dash_raw.empty:
+        st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
         st.stop()
         
     # Process
