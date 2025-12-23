@@ -666,9 +666,9 @@ def show_portfolio(df_dash, df_act):
             # Define Neon Color Scheme
             neon_range = ['#39FF14', '#00FFFF', '#FF00FF', '#FFFFFF', '#FFFF00']
             
-            # Base Lines (Sharp points, step-after interpolation)
+            # Base Lines (Sharp points, linear interpolation)
             lines = alt.Chart(pulse_df).mark_line(
-                interpolate='step-after', # Jagged ledger style
+                interpolate='linear', 
                 strokeWidth=2
             ).encode(
                 x=alt.X('MonthIndex', title='Months Since Launch', axis=alt.Axis(
@@ -685,7 +685,7 @@ def show_portfolio(df_dash, df_act):
             
             # Glowing Area Fill (Low opacity gradient)
             area = alt.Chart(pulse_df).mark_area(
-                interpolate='step-after',
+                interpolate='linear',
                 opacity=0.1,
                 color=alt.Gradient(
                     gradient='linear',
