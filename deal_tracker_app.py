@@ -852,7 +852,7 @@ def main():
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
     else:
-        show_portfolio(df_dash)
+        show_portfolio(df_dash, df_act)
 
 if __name__ == "__main__":
     main()
