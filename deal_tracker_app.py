@@ -362,10 +362,6 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     elapsed_months = max(1.0, elapsed_months)
     
     # --- RAMP-UP CURVE LOGIC (STRICTER v3) ---
-    # Month 3+ expects full linear velocity (1.0 factor).
-    # Month 2 expects 90% velocity.
-    # Month 1 keeps 60% handicap.
-    
     linear_progress = elapsed_months / target_months
     
     if elapsed_months <= 1.5:
@@ -394,20 +390,20 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # --- GRADING BANDS (STRICTER v2) ---
+    # --- GRADING BANDS (STRICTER v2 - UPDATED) ---
     # A+: >= 1.15
     # A: >= 1.00
     # B+: >= 0.95
-    # B: >= 0.85
-    # C: >= 0.70
+    # B: >= 0.78 (Lowered from 0.85 to save Jiinzo)
+    # C: >= 0.65 (Lowered from 0.70)
     # D: >= 0.50
     # F: < 0.50
     
     if pace_ratio >= 1.15: grade = "A+"
     elif pace_ratio >= 1.00: grade = "A"
     elif pace_ratio >= 0.95: grade = "B+"
-    elif pace_ratio >= 0.85: grade = "B"
-    elif pace_ratio >= 0.70: grade = "C"
+    elif pace_ratio >= 0.78: grade = "B"
+    elif pace_ratio >= 0.65: grade = "C"
     elif pace_ratio >= 0.50: grade = "D"
     else: grade = "F"
         
@@ -419,7 +415,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
 def process_data(df_dash, df_act, df_deals):
     # Ensure required columns exist
     if df_dash.empty:
-        return df_dash, df_act
+        return df_dash, df_act, None
 
     # MERGE DEALS DATA INTO DASHBOARD IF AVAILABLE
     if not df_deals.empty:
@@ -553,13 +549,18 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Target Amount'] = df_dash['Executed Advance']
     df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
     
-    return df_dash, df_act
+    return df_dash, df_act, current_date_override
 
 # -----------------------------------------------------------------------------
 # UI: PORTFOLIO PAGE
 # -----------------------------------------------------------------------------
-def show_portfolio(df_dash, df_act):
+def show_portfolio(df_dash, df_act, current_date_override):
     st.title(">>> GLOBAL DEAL TRACKER_")
+    
+    # --- DEBUG DISPLAY: REPORTING DATE ---
+    if current_date_override:
+        current_date_str = current_date_override.strftime('%Y-%m-%d')
+        st.caption(f"REPORTING DATE: {current_date_str}")
     
     # --- TICKER TAPE ---
     ticker_items = []
@@ -682,8 +683,8 @@ def show_portfolio(df_dash, df_act):
                 if overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.95: w_grade = "B+"
-                elif overall_ratio >= 0.85: w_grade = "B"
-                elif overall_ratio >= 0.70: w_grade = "C"
+                elif overall_ratio >= 0.78: w_grade = "B"
+                elif overall_ratio >= 0.65: w_grade = "C"
                 elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
                 
@@ -1097,12 +1098,15 @@ def main():
     if df_dash_raw.empty:
         st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
         st.stop()
-    df_dash, df_act = process_data(df_dash_raw, df_act_raw, df_deals_raw)
+    
+    # Process returns 3 values
+    df_dash, df_act, current_date_override = process_data(df_dash_raw, df_act_raw, df_deals_raw)
     
     if 'selected_deal_id' in st.session_state:
         show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
     else:
-        show_portfolio(df_dash, df_act)
+        # Pass override date to show_portfolio for debug caption
+        show_portfolio(df_dash, df_act, current_date_override)
 
 if __name__ == "__main__":
     main()
