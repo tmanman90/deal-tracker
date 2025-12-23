@@ -261,9 +261,9 @@ def calculate_pace_metrics(row, count):
     
     elapsed_months = max(0.1, elapsed_months)
     
-    # --- RAMP-UP CURVE LOGIC (TIGHTENED) ---
-    # Denominators: 20 (M1), 18 (M2), 15 (M3), 13 (M4)
-    # This ramps up to nearly full speed (12) by Month 4.
+    # --- RAMP-UP CURVE LOGIC (TIGHTENED v2) ---
+    # Denominators: 20 (M1), 18 (M2), 14 (M3), 12 (M4 - Full Speed)
+    # This ramps up to full speed (12) by Month 4 as requested.
     
     if elapsed_months <= 1.5:
         # Month 1: Expect 1/20th pace
@@ -272,13 +272,10 @@ def calculate_pace_metrics(row, count):
         # Month 2: Expect 2/18th pace
         expected_progress = elapsed_months / 18.0
     elif elapsed_months <= 3.5:
-        # Month 3: Expect 3/15th pace
-        expected_progress = elapsed_months / 15.0
-    elif elapsed_months <= 4.5:
-        # Month 4: Expect 4/13th pace
-        expected_progress = elapsed_months / 13.0
+        # Month 3: Expect 3/14th pace
+        expected_progress = elapsed_months / 14.0
     else:
-        # Month 5+: Standard linear expectation (x/12)
+        # Month 4+: Standard linear expectation (x/12) - Full Speed
         expected_progress = elapsed_months / 12.0
 
     # Cap expectation at 1.0 (100%)
