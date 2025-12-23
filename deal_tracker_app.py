@@ -184,6 +184,33 @@ def clean_percent(val):
     except:
         return 0.0
 
+def parse_flexible_date(date_str):
+    """
+    Tries multiple date formats to handle mixed '2025' and '25' years.
+    Returns NaT if all fail.
+    """
+    if pd.isna(date_str) or str(date_str).strip() == "":
+        return pd.NaT
+    
+    date_str = str(date_str).strip()
+    
+    # List of formats to try
+    formats = [
+        '%m/%d/%Y',  # 09/30/2025
+        '%m/%d/%y',  # 09/30/25
+        '%Y-%m-%d',  # 2025-09-30
+        '%d-%b-%y',  # 30-Sep-25
+    ]
+    
+    for fmt in formats:
+        try:
+            return pd.to_datetime(date_str, format=fmt)
+        except:
+            continue
+            
+    # Last resort: let pandas guess (but it might be slow or wrong on ambiguous cases)
+    return pd.to_datetime(date_str, errors='coerce')
+
 def calculate_pace_metrics(row, count):
     """
     Calculates Grade and Pace based on Benchmark (12 months).
@@ -200,7 +227,8 @@ def calculate_pace_metrics(row, count):
         if 'Forecast Start Date' not in row:
              return "N/A", 0.0, False, 0
              
-        forecast_start = pd.to_datetime(row['Forecast Start Date'])
+        # Use flexible parser for dashboard dates too
+        forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
             return "N/A", 0.0, False, 0
     except:
@@ -263,8 +291,11 @@ def process_data(df_dash, df_act):
     # Process Actuals Dates & Values
     if 'Net Receipts' in df_act.columns:
         df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
+    
+    # ROBUST DATE CLEANING FOR ACTUALS
     if 'Period End Date' in df_act.columns:
-        df_act['Period End Date'] = pd.to_datetime(df_act['Period End Date'], errors='coerce')
+        # Apply custom flexible parser to handle mixed '2025' and '25' years
+        df_act['Period End Date'] = df_act['Period End Date'].apply(parse_flexible_date)
     
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
@@ -426,7 +457,9 @@ def show_portfolio(df_dash):
 
     # 3. Dates (Jan 2026)
     if 'Predicted BE Date' in display_df.columns:
-        display_df['Predicted BE Date'] = pd.to_datetime(display_df['Predicted BE Date'], errors='coerce').dt.strftime('%b %Y').fillna('-').str.upper()
+        # Handle predictions using the same flexible parser
+        display_df['Predicted BE Date'] = display_df['Predicted BE Date'].apply(parse_flexible_date)
+        display_df['Predicted BE Date'] = display_df['Predicted BE Date'].dt.strftime('%b %Y').fillna('-').str.upper()
 
     # Hide Grade if not eligible
     if 'Grade' in display_df.columns:
@@ -512,8 +545,13 @@ def show_detail(df_dash, df_act, deal_id):
     
     cum_val = deal_row.get('Cum Receipts', 0)
     rem_val = deal_row.get('Remaining to BE', 0)
-    start_date = deal_row.get('Forecast Start Date', '-')
-    be_date = deal_row.get('Predicted BE Date', '-')
+    
+    # Format dates nicely
+    start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    
+    be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
+    be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
     row1_c1.metric("STATUS", status_val)
     row1_c2.metric("PERFORMANCE GRADE", grade_display, delta_color="normal")
@@ -523,8 +561,8 @@ def show_detail(df_dash, df_act, deal_id):
     row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
     row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
-    row2_c3.metric("FORECAST START", str(start_date))
-    row2_c4.metric("EST BREAKEVEN", str(be_date))
+    row2_c3.metric("FORECAST START", start_date_str)
+    row2_c4.metric("EST BREAKEVEN", be_date_str)
 
     st.markdown("---")
 
@@ -582,65 +620,73 @@ def show_detail(df_dash, df_act, deal_id):
     
     if not deal_act.empty:
         # Prepare Data for Charts
-        # Sort by date (handling NaT for sort)
+        # 1. DROP INVALID DATES STRICTLY. If it's NaT, it's not a month.
         if 'Period End Date' in deal_act.columns:
-            # Sort, putting NaT last (or first, doesn't matter much for normalized, but keeps valid chronological)
-            deal_act = deal_act.sort_values('Period End Date', na_position='first')
+            deal_act = deal_act.dropna(subset=['Period End Date']).copy()
+            # Sort chronologically. 
+            deal_act = deal_act.sort_values('Period End Date')
         
-        # Normalize Date to "M#"
-        deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
-        deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
-        
-        # Calculate Cumulative
-        if 'Net Receipts' in deal_act.columns:
-            deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
-            # Rolling Average (3 months)
-            deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
+        if not deal_act.empty:
+            # Normalize Date to "M#"
+            deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
+            deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
+            
+            # Format Date for Tooltip
+            deal_act['DateStr'] = deal_act['Period End Date'].dt.strftime('%b %Y')
+            
+            # Calculate Cumulative
+            if 'Net Receipts' in deal_act.columns:
+                deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
+                # Rolling Average (3 months)
+                deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
+            else:
+                deal_act['CumNet'] = 0
+                deal_act['Rolling3'] = 0
+                deal_act['Net Receipts'] = 0
+            
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                # BAR CHART: MONTHLY RECEIPTS
+                # Added 'DateStr' to tooltip for debugging
+                bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
+                    x=alt.X('MonthLabel', sort=None, title='Period'),
+                    y=alt.Y('Net Receipts', title='Net Receipts'),
+                    tooltip=['MonthLabel', 'DateStr', 'Net Receipts']
+                ).properties(title="MONTHLY ACTUALS")
+                st.altair_chart(bar, use_container_width=True)
+                
+            with c2:
+                # LINE CHART: CUMULATIVE vs ADVANCE
+                line = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
+                    x=alt.X('MonthLabel', sort=None, title='Period'),
+                    y=alt.Y('CumNet', title='Cumulative Net'),
+                    tooltip=['MonthLabel', 'DateStr', 'CumNet']
+                )
+                
+                # Advance Line
+                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='#ffbf00', strokeDash=[4, 4]).encode(y='y')
+                
+                st.altair_chart(line + rule_adv, use_container_width=True)
+                
+            # --- PROJECTION LOGIC ---
+            st.markdown("### > TERMINAL FORECAST")
+            
+            last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
+            remaining = rem_val
+            
+            if remaining <= 0:
+                st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
+            elif last_rolling > 0:
+                months_to_go = remaining / last_rolling
+                st.markdown(f"""
+                BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
+                ESTIMATED TIME TO RECOUP: **{months_to_go:.1f} MONTHS**
+                """)
+            else:
+                st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
         else:
-            deal_act['CumNet'] = 0
-            deal_act['Rolling3'] = 0
-            deal_act['Net Receipts'] = 0
-        
-        c1, c2 = st.columns(2)
-        
-        with c1:
-            # BAR CHART: MONTHLY RECEIPTS
-            bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
-                x=alt.X('MonthLabel', sort=None, title='Period'),
-                y=alt.Y('Net Receipts', title='Net Receipts'),
-                tooltip=['MonthLabel', 'Net Receipts']
-            ).properties(title="MONTHLY ACTUALS")
-            st.altair_chart(bar, use_container_width=True)
-            
-        with c2:
-            # LINE CHART: CUMULATIVE vs ADVANCE
-            line = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
-                x=alt.X('MonthLabel', sort=None, title='Period'),
-                y=alt.Y('CumNet', title='Cumulative Net'),
-                tooltip=['MonthLabel', 'CumNet']
-            )
-            
-            # Advance Line
-            rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='#ffbf00', strokeDash=[4, 4]).encode(y='y')
-            
-            st.altair_chart(line + rule_adv, use_container_width=True)
-            
-        # --- PROJECTION LOGIC ---
-        st.markdown("### > TERMINAL FORECAST")
-        
-        last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
-        remaining = rem_val
-        
-        if remaining <= 0:
-            st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
-        elif last_rolling > 0:
-            months_to_go = remaining / last_rolling
-            st.markdown(f"""
-            BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
-            ESTIMATED TIME TO RECOUP: **{months_to_go:.1f} MONTHS**
-            """)
-        else:
-            st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
+             st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
             
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
