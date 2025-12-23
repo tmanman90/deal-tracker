@@ -289,7 +289,7 @@ def parse_flexible_date(date_str):
 def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None):
     """
     Calculates Grade and Pace based on Benchmark.
-    Includes 'Half-Month Mulligan' for the initial period.
+    Includes 'Ramp-up Curve' for first 4 months.
     Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
     Uses current_date_override (latest data date) as 'today' for month calculation.
     
@@ -675,9 +675,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 if overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.75: w_grade = "B"
+                elif overall_ratio >= 0.80: w_grade = "B"
+                elif overall_ratio >= 0.70: w_grade = "C+"
                 elif overall_ratio >= 0.60: w_grade = "C"
-                elif overall_ratio >= 0.40: w_grade = "D"
+                elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
                 
                 kpi5.metric("WEIGHTED GRADE", w_grade)
@@ -720,7 +721,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         
-        # Updated grade color logic
+        # Updated grade color logic (Stricter)
         if grade in ["A+", "A", "B+"]:
             grade_color = "#33ff00" # Green
         elif grade == "B":
@@ -1081,6 +1082,14 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
+        
+    st.markdown("---")
+    with st.expander("🕵️ DEAL DETECTIVE (DEBUG)"):
+        st.write(f"**Forecast Start Date (Smart):** {deal_row.get('Forecast Start Date')}")
+        st.write(f"**Elapsed Months (Raw):** {deal_row.get('Elapsed Months')}")
+        st.write(f"**Effective Months (Mulligan):** {max(0, deal_row.get('Elapsed Months',0) - 0.5)}")
+        st.write(f"**Pace Ratio:** {deal_row.get('Pace Ratio')}")
+        st.write(f"**Target Amount:** {deal_row.get('Target Amount')}")
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
