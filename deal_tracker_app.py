@@ -190,7 +190,8 @@ def calculate_pace_metrics(row, data_months_count):
     Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months).
     """
     # 1. Eligibility Check
-    if data_months_count < 5:
+    # UPDATED: Lowered requirement to 3 months (was 5)
+    if data_months_count < 3:
         return "N/A", 0.0, False, 0
     
     # 2. Parse Dates
@@ -569,7 +570,8 @@ def show_detail(df_dash, df_act, deal_id):
             Pace Ratio: {pace_ratio:.2f}x
             """)
         else:
-            st.warning("INSUFFICIENT DATA FOR PACE GRADING (<5 MONTHS ACTUALS)")
+            # UPDATED: Lowered requirement text to 3 months (was 5)
+            st.warning("INSUFFICIENT DATA FOR PACE GRADING (<3 MONTHS ACTUALS)")
 
     # --- CHARTS ---
     st.markdown("### > PERFORMANCE VISUALIZATION (NORMALIZED M1, M2...)")
