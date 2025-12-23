@@ -435,10 +435,21 @@ def show_portfolio(df_dash, df_act):
     ticker_items = []
     if not df_dash.empty:
         # Sort by best performing grade if available, else standard
-        sorted_deals = df_dash.sort_values('Pace Ratio', ascending=False)
+        if 'Pace Ratio' in df_dash.columns:
+            sorted_deals = df_dash.sort_values('Pace Ratio', ascending=False)
+        else:
+            sorted_deals = df_dash
+            
         for _, row in sorted_deals.iterrows():
+            # Robust key access for Artist Name
+            artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
+            
             symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
-            item = f"{row['Artist / Project']} ({row.get('Grade', 'N/A')}) {symbol} {row.get('% to BE Clean', 0)*100:.1f}%"
+            # Ensure safe access to clean percentage
+            pct = row.get('% to BE Clean', 0)
+            if pd.isna(pct): pct = 0.0
+            
+            item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
             ticker_items.append(item)
     
     ticker_html = f"""
@@ -508,8 +519,12 @@ def show_portfolio(df_dash, df_act):
     
     if search:
         mask = pd.Series([False] * len(filtered))
+        # Handle Artist column name robustly
         if 'Artist / Project' in filtered.columns:
             mask = mask | filtered['Artist / Project'].astype(str).str.lower().str.contains(search)
+        elif 'Artist' in filtered.columns:
+            mask = mask | filtered['Artist'].astype(str).str.lower().str.contains(search)
+            
         if 'Deal ID' in filtered.columns:
             mask = mask | filtered['Deal ID'].astype(str).str.lower().str.contains(search)
         filtered = filtered[mask]
@@ -563,13 +578,21 @@ def show_portfolio(df_dash, df_act):
     
     # --- ROSTER TABLE ---
     # Prepare display dataframe
+    # Look for Artist name safely
+    artist_col = 'Artist / Project' if 'Artist / Project' in filtered.columns else 'Artist'
+    
     display_cols = [
-        'Artist / Project', 'Deal ID', 'Status', 'Grade', '% to BE', 
+        artist_col, 'Deal ID', 'Status', 'Grade', '% to BE', 
         'Remaining to BE', 'Executed Advance', 'Predicted BE Date'
     ]
+    # Only use columns that exist
     existing_cols = [c for c in display_cols if c in filtered.columns]
     
     display_df = filtered[existing_cols].copy()
+    
+    # Rename for consistency if needed
+    if artist_col == 'Artist':
+        display_df = display_df.rename(columns={'Artist': 'Artist / Project'})
     
     # --- DISPLAY FORMATTING ---
     if '% to BE' in display_df.columns and '% to BE Clean' in filtered.columns:
