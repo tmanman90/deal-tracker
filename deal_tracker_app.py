@@ -653,7 +653,7 @@ def show_detail(df_dash, df_act, deal_id):
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
 
     # --- CHARTS ---
-    st.markdown("### > PERFORMANCE VISUALIZATION (NORMALIZED M1, M2...)")
+    st.markdown("### > PERFORMANCE VISUALIZATION")
     
     if not deal_act.empty:
         if 'Period End Date' in deal_act.columns:
@@ -673,6 +673,21 @@ def show_detail(df_dash, df_act, deal_id):
                 deal_act['Rolling3'] = 0
                 deal_act['Net Receipts'] = 0
             
+            # Forecast Data: Linear line from 0 to Advance over 12 months
+            # We map Month 1 to (Adv/12 * 1), Month 2 to (Adv/12 * 2), etc.
+            # Only go up to the max month index available in actuals for comparison
+            max_month = deal_act['MonthIndex'].max()
+            forecast_data = []
+            monthly_forecast = adv_val / 12.0 if adv_val > 0 else 0
+            for i in range(1, max_month + 1):
+                forecast_data.append({
+                    'MonthIndex': i,
+                    'ForecastCum': monthly_forecast * i,
+                    'Type': 'Forecast'
+                })
+            
+            df_forecast = pd.DataFrame(forecast_data)
+            
             c1, c2 = st.columns(2)
             
             with c1:
@@ -684,13 +699,47 @@ def show_detail(df_dash, df_act, deal_id):
                 st.altair_chart(bar, use_container_width=True)
                 
             with c2:
-                line = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
+                # Actual Line
+                line_actual = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
                     x=alt.X('MonthLabel', sort=None, title='Period'),
                     y=alt.Y('CumNet', title='Cumulative Net'),
                     tooltip=['MonthLabel', 'DateStr', 'CumNet']
                 )
-                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='#ffbf00', strokeDash=[4, 4]).encode(y='y')
-                st.altair_chart(line + rule_adv, use_container_width=True)
+                
+                # Forecast Line (if we have data)
+                if not df_forecast.empty:
+                    # We need to map MonthIndex back to MonthLabel for the X axis to match
+                    # Create a simple lookup or just use MonthIndex if we switch X axis type
+                    # Easiest way: merge forecast data with month labels
+                    df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
+                    
+                    line_forecast = alt.Chart(df_forecast).mark_line(
+                        color='#ffbf00', 
+                        strokeDash=[5, 5]
+                    ).encode(
+                        x=alt.X('MonthLabel', sort=None),
+                        y=alt.Y('ForecastCum'),
+                        tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
+                    )
+                    
+                    # Combine layers
+                    final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
+                else:
+                    final_chart = line_actual
+
+                # Add Advance Line
+                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+                
+                st.altair_chart(final_chart + rule_adv, use_container_width=True)
+                
+                # Legend / Key
+                st.markdown("""
+                <div style="text-align: center; font-size: 0.8rem;">
+                    <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
+                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span> &nbsp;&nbsp;
+                    <span style="color: white;">··· Advance Target</span>
+                </div>
+                """, unsafe_allow_html=True)
                 
             st.markdown("### > TERMINAL FORECAST")
             last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
