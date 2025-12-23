@@ -241,22 +241,23 @@ def calculate_pace_metrics(row, count):
     
     elapsed_months = max(0.1, elapsed_months)
     
-    # --- RAMP-UP CURVE LOGIC ---
-    # Accounts for slow "trickle-in" payments from distributors in early months.
-    # Instead of linear (x/12), we use a softer denominator.
+    # --- RAMP-UP CURVE LOGIC (TIGHTENED) ---
+    # We tightened this curve to ensure early months are not graded too softly.
+    # Denominators: 20 (M1), 18 (M2), 15 (M3), 13 (M4)
+    # This ramps up to nearly full speed (12) by Month 4.
     
     if elapsed_months <= 1.5:
-        # Month 1: Expect 1/24th pace
-        expected_progress = elapsed_months / 24.0
-    elif elapsed_months <= 2.5:
-        # Month 2: Expect 2/20th pace
+        # Month 1: Expect 1/20th pace
         expected_progress = elapsed_months / 20.0
-    elif elapsed_months <= 3.5:
-        # Month 3: Expect 3/18th pace
+    elif elapsed_months <= 2.5:
+        # Month 2: Expect 2/18th pace
         expected_progress = elapsed_months / 18.0
+    elif elapsed_months <= 3.5:
+        # Month 3: Expect 3/15th pace
+        expected_progress = elapsed_months / 15.0
     elif elapsed_months <= 4.5:
-        # Month 4: Expect 4/16th pace
-        expected_progress = elapsed_months / 16.0
+        # Month 4: Expect 4/13th pace
+        expected_progress = elapsed_months / 13.0
     else:
         # Month 5+: Standard linear expectation (x/12)
         expected_progress = elapsed_months / 12.0
@@ -276,7 +277,15 @@ def calculate_pace_metrics(row, count):
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # --- UPDATED GRADING BANDS (WITH PLUSES) ---
+    # --- GRADING BANDS ---
+    # A+: >= 1.10
+    # A:  >= 1.00
+    # B+: >= 0.90
+    # B:  >= 0.80
+    # C+: >= 0.70
+    # C:  >= 0.60
+    # D:  >= 0.50
+    # F:  < 0.50
     
     if pace_ratio >= 1.10:
         grade = "A+"
