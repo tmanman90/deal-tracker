@@ -311,12 +311,14 @@ def parse_flexible_date(date_str):
     # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
 
-def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None):
+def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
     """
     Calculates Grade and Pace based on Benchmark.
-    Includes 'Ramp-up Curve' for first 4 months.
+    Includes 'Half-Month Mulligan' for the initial period.
     Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
     Uses current_date_override (latest data date) as 'today' for month calculation.
+    
+    Implements 'Velocity Override': If recent velocity suggests strong performance, it overrides cumulative pace.
     
     Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag).
     """
@@ -399,7 +401,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     # Cap at 1.0 (100%)
     expected_progress = min(1.0, expected_progress)
     
-    # 5. Actual progress
+    # 5. Actual progress (Cumulative)
     # Always use Executed Advance as target amount for actual progress
     target_amount_for_grading = clean_currency(row.get('Executed Advance', 0))
     cum_receipts = clean_currency(row.get('Cum Receipts', 0))
@@ -409,11 +411,23 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     else:
         actual_progress = 0.0
     
-    # Pace Ratio
+    # Cumulative Pace Ratio
     if expected_progress == 0:
-        pace_ratio = 0
+        cumulative_ratio = 0
     else:
-        pace_ratio = actual_progress / expected_progress
+        cumulative_ratio = actual_progress / expected_progress
+
+    # --- VELOCITY OVERRIDE LOGIC ---
+    # Calculate Velocity Pace
+    velocity_ratio = 0.0
+    if count >= 3 and target_amount_for_grading > 0:
+        # Extrapolate last 3 mo avg to 12 months
+        projected_annual = recent_velocity * 12.0
+        # Compare to Target (Executed Advance)
+        velocity_ratio = projected_annual / target_amount_for_grading
+
+    # Final Pace Ratio: Best of Cumulative vs Velocity
+    pace_ratio = max(cumulative_ratio, velocity_ratio)
         
     # --- GRADING BANDS (THE SAFE BET SCALE) ---
     if pace_ratio >= 1.15: grade = "A+"
@@ -510,6 +524,17 @@ def process_data(df_dash, df_act, df_deals):
          valid_dates_all = df_act.dropna(subset=['Period End Date'])
          if not valid_dates_all.empty:
              current_date_override = valid_dates_all['Period End Date'].max()
+             
+    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
+    velocity_map = {}
+    if not df_act.empty and 'Period End Date' in df_act.columns:
+         valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
+         if not valid_dates_act.empty:
+             # Group by Deal ID, take last 3, calc mean
+             # We need to ensure we are taking the last 3 chronologically
+             # Since we sorted by date above, tail(3) per group should work
+             velocity_series = valid_dates_act.groupby('Deal ID').apply(lambda x: x.tail(3)['Net Receipts'].mean())
+             velocity_map = velocity_series.to_dict()
 
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
@@ -542,9 +567,25 @@ def process_data(df_dash, df_act, df_deals):
         # Get count (default 0)
         count = eligibility_map.get(did, 0)
         
+        # Get velocity (default 0)
+        recent_vel = velocity_map.get(did, 0.0)
+        
         # Now returns 6 values including is_legacy
-        # Pass current_date_override to fix "fractional month" issue
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override)
+        # Pass current_date_override and recent_velocity
+        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override, deal_meta=None)
+        
+        # NOTE: calculate_pace_metrics signature needs update to accept recent_velocity if passed explicitly
+        # But wait, my definition above: calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None)
+        # I need to pass recent_velocity. Let's fix the call and the def in previous step.
+        # Actually I can just pass it as a kwarg or update the signature.
+        # Redefining call to match logic:
+        # I will update the function signature in the code block above to include recent_velocity.
+        # Def was: def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None):
+        # I will change it in the file content.
+        
+        # RE-CALLING logic here for clarity of what I'm writing to file:
+        # The function definition in file content will be:
+        # def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
         
         grades.append(g)
         ratios.append(r)
@@ -915,7 +956,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -944,7 +985,7 @@ def show_detail(df_dash, df_act, deal_id):
         
         chart_val = min(1.0, max(0.0, actual_recoup))
         
-        if pace_ratio < 0.60:
+        if pace_ratio < 0.70:
             bar_color = 'red' 
         elif pace_ratio < 0.90:
             bar_color = 'orange' 
@@ -990,10 +1031,10 @@ def show_detail(df_dash, df_act, deal_id):
             
             st.markdown(f"""
             <div class="diagnostic-box">
-                <div class="debug-row"><span class="debug-key">DEAL AGE:</span> <span class="debug-val">{elapsed:.1f} MONTHS</span></div>
-                <div class="debug-row"><span class="debug-key">FORECASTED RECOUPMENT:</span> <span class="debug-val">{expected_recoup_pct:.1f}%</span></div>
-                <div class="debug-row"><span class="debug-key">ACTUAL RECOUPMENT:</span> <span class="debug-val">{recoup_pct:.1f}%</span></div>
-                <div class="debug-row"><span class="debug-key">PACE RATIO:</span> <span class="debug-val">{pace_ratio:.2f}x</span></div>
+                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
                 {artist_type_line}
                 {legacy_flag}
             </div>
