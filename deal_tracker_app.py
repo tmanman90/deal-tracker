@@ -543,7 +543,7 @@ def show_portfolio(df_dash, df_act):
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5) # Added 5th column
     
     kpi1.metric("ACTIVE DEALS", len(filtered))
     
@@ -559,6 +559,39 @@ def show_portfolio(df_dash, df_act):
         kpi4.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
     else:
         kpi4.metric("WEIGHTED RECOUPMENT", "0.0%")
+        
+    # Weighted Grade Calculation
+    if total_adv > 0 and 'Pace Ratio' in filtered.columns and 'Is Eligible' in filtered.columns:
+        # Filter for eligible deals only for grade calculation
+        eligible_deals = filtered[filtered['Is Eligible'] == True]
+        
+        if not eligible_deals.empty:
+            # Weighted Score = Pace Ratio * Advance
+            eligible_deals['Weighted Score'] = eligible_deals['Pace Ratio'] * eligible_deals['Executed Advance']
+            
+            total_eligible_adv = eligible_deals['Executed Advance'].sum()
+            total_score = eligible_deals['Weighted Score'].sum()
+            
+            if total_eligible_adv > 0:
+                overall_ratio = total_score / total_eligible_adv
+                
+                # Convert Ratio to Grade using same logic as per deal
+                if overall_ratio >= 1.10: w_grade = "A+"
+                elif overall_ratio >= 1.00: w_grade = "A"
+                elif overall_ratio >= 0.90: w_grade = "B+"
+                elif overall_ratio >= 0.80: w_grade = "B"
+                elif overall_ratio >= 0.70: w_grade = "C+"
+                elif overall_ratio >= 0.60: w_grade = "C"
+                elif overall_ratio >= 0.50: w_grade = "D"
+                else: w_grade = "F"
+                
+                kpi5.metric("WEIGHTED GRADE", w_grade)
+            else:
+                kpi5.metric("WEIGHTED GRADE", "N/A")
+        else:
+            kpi5.metric("WEIGHTED GRADE", "N/A")
+    else:
+        kpi5.metric("WEIGHTED GRADE", "N/A")
     
     st.markdown("---")
     
