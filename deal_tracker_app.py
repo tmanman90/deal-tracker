@@ -663,24 +663,37 @@ def show_portfolio(df_dash, df_act):
         if pulse_data:
             pulse_df = pd.DataFrame(pulse_data)
             
-            # Create Chart
-            pulse_chart = alt.Chart(pulse_df).mark_line(
-                point=False, 
-                strokeWidth=2,
-                interpolate='monotone' # Squiggly line
+            # --- UPDATED PULSE CHART (TERMINAL STYLE) ---
+            # Define Neon Color Scheme
+            neon_range = ['#39FF14', '#00FFFF', '#FF00FF', '#FFFFFF', '#FFFF00']
+            
+            # Base Lines (Sharp points, linear interpolation)
+            lines = alt.Chart(pulse_df).mark_line(
+                interpolate='linear', 
+                strokeWidth=2
             ).encode(
-                x=alt.X('MonthIndex', title='Months Since Launch'),
-                y=alt.Y('PctRecouped', title='Recoupment %', axis=alt.Axis(format='%')),
-                color=alt.Color('Artist', legend=None), # Hide legend for cleaner look, use tooltip
+                x=alt.X('MonthIndex', title='Months Since Launch', axis=alt.Axis(domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4])),
+                y=alt.Y('PctRecouped', title='Recoupment %', axis=alt.Axis(format='%', domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4])),
+                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None),
                 tooltip=['Artist', 'MonthIndex', alt.Tooltip('PctRecouped', format='.1%')]
-            ).properties(
+            )
+            
+            # Glowing Area Fill (Low opacity gradient)
+            area = alt.Chart(pulse_df).mark_area(
+                interpolate='linear',
+                opacity=0.1
+            ).encode(
+                x='MonthIndex',
+                y='PctRecouped',
+                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None)
+            )
+            
+            # Combine
+            pulse_chart = (area + lines).properties(
                 height=250,
                 width='container'
             ).configure_view(
-                strokeWidth=0
-            ).configure_axis(
-                grid=True,
-                gridColor='#333333'
+                strokeWidth=0  # No border around chart
             )
             
             st.altair_chart(pulse_chart, use_container_width=True)
