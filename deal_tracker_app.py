@@ -159,10 +159,10 @@ def load_data():
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     """Converts currency strings to floats."""
+    if pd.isna(val) or str(val).strip() == "":
+        return 0.0
     if isinstance(val, (int, float)):
         return float(val)
-    if not val or val == "":
-        return 0.0
     # Remove common currency symbols
     clean_str = str(val).replace('$', '').replace(',', '').replace(' ', '')
     try:
@@ -172,7 +172,7 @@ def clean_currency(val):
 
 def clean_percent(val):
     """Converts '50%', 50, or 0.5 to a 0-1 float."""
-    if pd.isna(val) or val == "":
+    if pd.isna(val) or str(val).strip() == "":
         return 0.0
     if isinstance(val, (int, float)):
         return val if val <= 1.5 else val / 100.0 # Heuristic: if > 1.5, assume it's whole number percent
@@ -521,20 +521,20 @@ def show_detail(df_dash, df_act, deal_id):
         # Clamp for visualization
         chart_val = min(2.0, max(0.0, pace_ratio))
         
-        # Simple bar gauge
-        gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Pace']})
+        # Determine color in Python to avoid Altair condition errors
+        if chart_val < 0.8:
+            bar_color = 'red'
+        elif chart_val < 1.0:
+            bar_color = 'orange'
+        else:
+            bar_color = '#33ff00' # Neon Green
+            
+        # Simple bar gauge with safe python color logic
+        gauge_df = pd.DataFrame({'val': [chart_val], 'label': ['Pace'], 'color': [bar_color]})
         
         gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
             x=alt.X('val', scale=alt.Scale(domain=[0, 2]), title="Pace Ratio (1.0 = On Track)"),
-            color=alt.condition(
-                alt.datum.val < 0.8,
-                alt.value('red'),
-                alt.condition(
-                    alt.datum.val < 1.0,
-                    alt.value('orange'),
-                    alt.value('#33ff00') # Neon Green
-                )
-            )
+            color=alt.Color('color', scale=None, legend=None)
         ).properties(height=80, title="PACE METER")
         
         # Add benchmark line at 1.0
