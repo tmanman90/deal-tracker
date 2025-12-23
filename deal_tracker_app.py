@@ -361,17 +361,15 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     
     elapsed_months = max(1.0, elapsed_months)
     
-    # --- RAMP-UP CURVE LOGIC (TIGHTENED v2) ---
+    # --- RAMP-UP CURVE LOGIC (STRICTER) ---
     linear_progress = elapsed_months / target_months
     
     if elapsed_months <= 1.5:
-        curve_factor = 0.6 # M1: 1/20 vs 1/12
+        curve_factor = 0.6 # M1: Lenient
     elif elapsed_months <= 2.5:
-        curve_factor = 0.66 # M2: 2/18 vs 2/12
-    elif elapsed_months <= 3.5:
-        curve_factor = 0.85 # M3: 3/14 vs 3/12
+        curve_factor = 0.9 # M2: Significantly tighter (90% of linear)
     else:
-        curve_factor = 1.0 # M4+: Full speed
+        curve_factor = 1.0 # M3+: No handicap (100% linear velocity expected)
         
     expected_progress = linear_progress * curve_factor
     expected_progress = min(1.0, expected_progress)
@@ -392,13 +390,12 @@ def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=Non
     else:
         pace_ratio = actual_progress / expected_progress
         
-    # --- GRADING BANDS ---
-    if pace_ratio >= 1.10: grade = "A+"
+    # --- GRADING BANDS (STRICTER) ---
+    if pace_ratio >= 1.15: grade = "A+"
     elif pace_ratio >= 1.00: grade = "A"
-    elif pace_ratio >= 0.90: grade = "B+"
-    elif pace_ratio >= 0.80: grade = "B"
-    elif pace_ratio >= 0.70: grade = "C+"
-    elif pace_ratio >= 0.60: grade = "C"
+    elif pace_ratio >= 0.95: grade = "B+"
+    elif pace_ratio >= 0.85: grade = "B"
+    elif pace_ratio >= 0.70: grade = "C" # At Risk
     elif pace_ratio >= 0.50: grade = "D"
     else: grade = "F"
         
@@ -670,12 +667,11 @@ def show_portfolio(df_dash, df_act):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                if overall_ratio >= 1.10: w_grade = "A+"
+                if overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
-                elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.80: w_grade = "B"
-                elif overall_ratio >= 0.70: w_grade = "C+"
-                elif overall_ratio >= 0.60: w_grade = "C"
+                elif overall_ratio >= 0.95: w_grade = "B+"
+                elif overall_ratio >= 0.85: w_grade = "B"
+                elif overall_ratio >= 0.70: w_grade = "C"
                 elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
                 
@@ -718,7 +714,16 @@ def show_portfolio(df_dash, df_act):
         status = row.get('Status', '-')
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
-        grade_color = "#33ff00" if "A" in grade or "B+" in grade else "#ffbf00" if "B" in grade or "C+" in grade else "#ff3333" if "C" in grade or "D" in grade or "F" in grade else "#888"
+        
+        # Updated grade color logic
+        if grade in ["A+", "A", "B+"]:
+            grade_color = "#33ff00" # Green
+        elif grade == "B":
+            grade_color = "#ffbf00" # Amber (Warning)
+        elif grade in ["C", "D", "F"]:
+            grade_color = "#ff3333" # Red
+        else:
+            grade_color = "#888" # Grey/Default
         
         pct_val = row.get('% to BE Clean', 0)
         pct_str = f"{pct_val*100:.1f}%"
@@ -831,246 +836,6 @@ def show_portfolio(df_dash, df_act):
             st.altair_chart(pulse_chart, use_container_width=True, theme=None)
         else:
             st.info("No transaction data available for Pulse Chart.")
-
-# -----------------------------------------------------------------------------
-# UI: DEAL DETAIL PAGE
-# -----------------------------------------------------------------------------
-def show_detail(df_dash, df_act, deal_id):
-    if 'Deal ID' not in df_dash.columns:
-        st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
-        return
-        
-    deal_id = str(deal_id)
-    deal_subset = df_dash[df_dash['Deal ID'] == deal_id]
-    
-    if deal_subset.empty:
-        st.error(f"ERROR: Deal ID {deal_id} not found in DASHBOARD.")
-        if st.button("RESET"):
-            del st.session_state['selected_deal_id']
-            st.rerun()
-        return
-
-    deal_row = deal_subset.iloc[0]
-    deal_act = pd.DataFrame()
-    if not df_act.empty and 'Deal ID' in df_act.columns:
-        deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
-    
-    if st.button("<< RETURN TO DASHBOARD"):
-        del st.session_state['selected_deal_id']
-        st.rerun()
-        
-    artist_name = deal_row.get('Artist / Project', 
-                  deal_row.get('Artist', 
-                  deal_row.get('Project', 'UNKNOWN ARTIST')))
-    
-    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
-    
-    # --- HEADER STATS ---
-    row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
-    grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
-    status_val = deal_row.get('Status', '-')
-    
-    # Ensure values are clean
-    adv_val = clean_currency(deal_row.get('Executed Advance', 0))
-    cum_val = clean_currency(deal_row.get('Cum Receipts', 0))
-    rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
-    
-    # NOTE: Header stats use '% to BE Clean' which now reflects Legacy logic automatically
-    pct_val = deal_row.get('% to BE Clean', 0) * 100
-    
-    start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
-    be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
-    be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
-
-    row1_c1.metric("STATUS", status_val)
-    row1_c2.metric("PERFORMANCE GRADE", grade_display, delta_color="normal")
-    row1_c3.metric("EXECUTED ADVANCE", f"${adv_val:,.0f}")
-    row1_c4.metric("% RECOUPED", f"{pct_val:.1f}%")
-
-    row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
-    row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
-    row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
-    row2_c3.metric("FORECAST START", start_date_str)
-    row2_c4.metric("EST BREAKEVEN", be_date_str)
-
-    st.markdown("---")
-
-    # --- PACE BLOCK ---
-    st.markdown("### > PACE ANALYSIS")
-    
-    col_gauge, col_stats = st.columns([1, 2])
-    
-    with col_gauge:
-        actual_recoup = deal_row.get('% to BE Clean', 0)
-        expected_recoup = deal_row.get('Expected Recoupment', 0)
-        pace_ratio = deal_row.get('Pace Ratio', 0)
-        
-        chart_val = min(1.0, max(0.0, actual_recoup))
-        
-        if pace_ratio < 0.70:
-            bar_color = 'red' 
-        elif pace_ratio < 0.90:
-            bar_color = 'orange' 
-        else:
-            bar_color = '#33ff00' 
-            
-        gauge_df = pd.DataFrame({
-            'val': [chart_val], 
-            'label': ['Recoupment'], 
-            'color': [bar_color],
-            'Recoupment': [f"{actual_recoup*100:.1f}%"],
-            'Forecast': [f"{expected_recoup*100:.1f}%"]
-        })
-        
-        gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
-            x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
-            color=alt.Color('color', scale=None, legend=None),
-            tooltip=['label', 'Recoupment', 'Forecast']
-        ).properties(height=80, title="RECOUPMENT METER")
-        
-        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
-        st.altair_chart(gauge + rule, use_container_width=True)
-        
-    with col_stats:
-        if deal_row.get('Is Eligible', False):
-            elapsed = deal_row.get('Elapsed Months', 0)
-            recoup_pct = deal_row.get('% to BE Clean', 0) * 100
-            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
-            is_legacy = deal_row.get('Is Legacy', False)
-            tag_val = str(deal_row.get('Tags', '')).upper()
-            
-            if elapsed <= 4.5:
-                 note = "(Curved for ramp-up)"
-            else:
-                 note = "(Linear)"
-            
-            legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
-            
-            # Artist Type Line
-            artist_type_line = ""
-            if tag_val:
-                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
-            
-            st.markdown(f"""
-            <div class="diagnostic-box">
-                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
-                {artist_type_line}
-                {legacy_flag}
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            count_found = deal_row.get('Data Points Found', 0)
-            st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
-
-    # --- CHARTS ---
-    st.markdown("### > PERFORMANCE VISUALIZATION")
-    
-    if not deal_act.empty:
-        if 'Period End Date' in deal_act.columns:
-            deal_act = deal_act.dropna(subset=['Period End Date']).copy()
-            deal_act = deal_act.sort_values('Period End Date')
-        
-        if not deal_act.empty:
-            deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
-            deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
-            deal_act['DateStr'] = deal_act['Period End Date'].dt.strftime('%b %Y')
-            
-            if 'Net Receipts' in deal_act.columns:
-                deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
-                deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
-            else:
-                deal_act['CumNet'] = 0
-                deal_act['Rolling3'] = 0
-                deal_act['Net Receipts'] = 0
-            
-            # Forecast Data (Linear)
-            # Use 'Target Amount' from deal_row to draw forecast line correctly
-            target_amt = deal_row.get('Target Amount', adv_val) # adv_val is executed advance
-            
-            max_month = deal_act['MonthIndex'].max()
-            forecast_data = []
-            monthly_forecast = target_amt / 12.0 if target_amt > 0 else 0
-            for i in range(1, max_month + 1):
-                forecast_data.append({
-                    'MonthIndex': i,
-                    'ForecastCum': monthly_forecast * i,
-                    'Type': 'Forecast'
-                })
-            
-            df_forecast = pd.DataFrame(forecast_data)
-            
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
-                    x=alt.X('MonthLabel', sort=None, title='Period'),
-                    y=alt.Y('Net Receipts', title='Net Receipts'),
-                    tooltip=['MonthLabel', 'DateStr', 'Net Receipts']
-                ).properties(title="MONTHLY ACTUALS")
-                st.altair_chart(bar, use_container_width=True)
-                
-            with c2:
-                # Actual Line
-                line_actual = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
-                    x=alt.X('MonthLabel', sort=None, title='Period'),
-                    y=alt.Y('CumNet', title='Cumulative Net'),
-                    tooltip=['MonthLabel', 'DateStr', 'CumNet']
-                )
-                
-                # Forecast Line
-                if not df_forecast.empty:
-                    df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
-                    line_forecast = alt.Chart(df_forecast).mark_line(
-                        color='#ffbf00', 
-                        strokeDash=[5, 5]
-                    ).encode(
-                        x=alt.X('MonthLabel', sort=None),
-                        y=alt.Y('ForecastCum'),
-                        tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
-                    )
-                    final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
-                else:
-                    final_chart = line_actual
-
-                # Add Advance Line
-                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
-                
-                st.altair_chart(final_chart + rule_adv, use_container_width=True)
-                
-                st.markdown("""
-                <div style="text-align: center; font-size: 0.8rem;">
-                    <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
-                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            st.markdown("### > TERMINAL FORECAST")
-            last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
-            remaining = rem_val
-            
-            if remaining <= 0:
-                st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
-            elif last_rolling > 0:
-                months_to_go = remaining / last_rolling
-                
-                # NEW LOGIC: Calculate Total Time to Recoup
-                elapsed = deal_row.get('Elapsed Months', 0)
-                total_months = elapsed + months_to_go
-                
-                st.markdown(f"""
-                BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
-                ESTIMATED TOTAL TIME TO RECOUP: **{total_months:.1f} MONTHS**
-                """)
-            else:
-                st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
-        else:
-             st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
-    else:
-        st.warning("NO ACTUALS DATA FOUND ON SERVER.")
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
