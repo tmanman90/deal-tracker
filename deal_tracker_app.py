@@ -521,6 +521,45 @@ def process_data(df_dash, df_act, df_deals):
     # Compute Printer metrics
     printer_metrics = {} # Key: did, Value: dict of metrics
     
+    def detect_trickle_first_month(receipts_list):
+        """
+        Approach A (Trickle detection):
+        - Floor rule: Month1 <= 50
+        - Explosive jump: Month2 >= 5x Month1 (but only if Month2 is meaningful)
+        - Tiny vs early baseline: Month1 < 10% of median(M2..M4), if baseline exists & meaningful
+        Returns: (is_trickle: bool, reason: str)
+        """
+        if not receipts_list or len(receipts_list) < 2:
+            return False, ""
+
+        m1 = float(receipts_list[0] or 0.0)
+        m2 = float(receipts_list[1] or 0.0)
+
+        TRICKLE_FLOOR = 50.0
+        JUMP_MULT = 5.0
+
+        # Guardrails to reduce false flags from tiny numbers
+        MIN_MEANINGFUL_M2_FOR_JUMP = 500.0      # prevents "80 -> 420" being flagged
+        MIN_BASELINE_FOR_TINY_TEST = 300.0      # prevents weird tiny baselines
+
+        # Rule 1: Hard floor
+        if m1 <= TRICKLE_FLOOR:
+            return True, f"TRICKLE_FLOOR (M1=${m1:,.0f} <= ${TRICKLE_FLOOR:,.0f})"
+
+        # Rule 2: Explosive jump (only if M2 is meaningful and M1 > 0)
+        if m1 > 0 and m2 >= MIN_MEANINGFUL_M2_FOR_JUMP and (m2 / m1) >= JUMP_MULT:
+            return True, f"EXPLOSIVE_JUMP (M2=${m2:,.0f} is {(m2/m1):.1f}x M1=${m1:,.0f})"
+
+        # Rule 3: Tiny vs early baseline (median of M2..M4)
+        baseline_window = receipts_list[1:4]  # months 2-4 (up to 3 values)
+        baseline_vals = [float(x) for x in baseline_window if x is not None]
+        if baseline_vals:
+            baseline_med = float(np.median(baseline_vals))
+            if baseline_med >= MIN_BASELINE_FOR_TINY_TEST and m1 < 0.10 * baseline_med:
+                return True, f"TINY_VS_BASELINE (M1=${m1:,.0f} < 10% of median(M2..M4)=${baseline_med:,.0f})"
+
+        return False, ""
+
     if not df_act.empty and 'Period End Date' in df_act.columns:
          valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
          if not valid_dates_act.empty:
@@ -561,6 +600,10 @@ def process_data(df_dash, df_act, df_deals):
                  # (MonthsCount >= 4) AND (SMA3 >= 500)
                  is_printer = (months_count >= 4) and (sma3 >= 500)
                  
+                 # --- TRICKLE DETECTION (Month 1 only) ---
+                 receipts_list = group["Net Receipts"].astype(float).tolist()
+                 is_trickle, trickle_reason = detect_trickle_first_month(receipts_list)
+
                  printer_metrics[did] = {
                      'MonthsCount': months_count,
                      'LastMonth': last_month_val,
@@ -568,7 +611,9 @@ def process_data(df_dash, df_act, df_deals):
                      'SMA3': sma3,
                      'PrinterScore': printer_score,
                      'MoM_pct': mom_pct,
-                     'IsPrinterEligible': is_printer
+                     'IsPrinterEligible': is_printer,
+                     'TrickleDetected': is_trickle,
+                     'TrickleReason': trickle_reason
                  }
     
     # --- NEW RECOUPMENT MAP LOGIC ---
@@ -627,6 +672,8 @@ def process_data(df_dash, df_act, df_deals):
     pm_score = []
     pm_mom = []
     pm_eligible = []
+    pm_trickle = []
+    pm_trickle_reason = []
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -640,7 +687,8 @@ def process_data(df_dash, df_act, df_deals):
         # Get printer metrics
         pm = printer_metrics.get(did, {
             'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
-            'SMA3': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False
+            'SMA3': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
+            'TrickleDetected': False, 'TrickleReason': ''
         })
         
         pm_months_count.append(pm['MonthsCount'])
@@ -650,6 +698,8 @@ def process_data(df_dash, df_act, df_deals):
         pm_score.append(pm['PrinterScore'])
         pm_mom.append(pm['MoM_pct'])
         pm_eligible.append(pm['IsPrinterEligible'])
+        pm_trickle.append(pm['TrickleDetected'])
+        pm_trickle_reason.append(pm['TrickleReason'])
         
         # Determine specific "Today" for this deal
         # If recouped, freeze time at recoupment date
@@ -692,6 +742,8 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['PrinterScore'] = pm_score
     df_dash['MoM_pct'] = pm_mom
     df_dash['IsPrinterEligible'] = pm_eligible
+    df_dash['TrickleDetected'] = pm_trickle
+    df_dash['TrickleReason'] = pm_trickle_reason
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -1032,6 +1084,22 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         act["Close"] = pd.to_numeric(act["Net Receipts"], errors="coerce").fillna(0)
                         act["Open"] = act["Close"].shift(1)
 
+                        # --- TRICKLE VISUAL FIX (Approach A) ---
+                        # If Month 1 was flagged as trickle, we "ignore" it for comparisons by flattening Month2's candle:
+                        # Set Month2 Open = Month2 Close (prevents a giant "up candle" from a tiny/partial Month1)
+                        trickle_flag = False
+                        trickle_reason = ""
+                        # Pull trickle flag from DASHBOARD for the selected deal
+                        dash_row = eligible[eligible["did_norm"] == selected_id]
+                        if not dash_row.empty:
+                            trickle_flag = bool(dash_row.iloc[0].get("TrickleDetected", False))
+                            trickle_reason = str(dash_row.iloc[0].get("TrickleReason", "")).strip()
+                        
+                        if trickle_flag and len(act) >= 2:
+                            # act is sorted by date, so second row is month 2
+                            idx_m2 = act.index[1]
+                            act.loc[idx_m2, "Open"] = act.loc[idx_m2, "Close"]
+
                         # Candle body bounds
                         act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
                         act["BodyBot"] = act[["Open", "Close"]].min(axis=1)
@@ -1047,13 +1115,37 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         # Headline stats
                         last_close = float(act["Close"].iloc[-1])
                         prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
-                        mom_pct = ((last_close - prev_close) / prev_close) if prev_close else 0.0
+                        
+                        # If prior month is "trickle-ish", don’t print a nonsense MoM %
+                        # Condition: deal was trickle-flagged AND we’re still early enough that MoM compares against Month1
+                        mom_text_override = None
+                        if trickle_flag and len(act) == 2:
+                            # Only two months exist: MoM would be M2 vs trickle-M1 -> meaningless
+                            mom_text_override = "TRICKLE"
+                        else:
+                            # Also protect against tiny denominators in general
+                            if prev_close <= 50:
+                                mom_text_override = "TRICKLE"
+                        
+                        if mom_text_override is not None:
+                            mom_pct = None
+                        else:
+                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else 0.0
+                            
                         sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
 
                         m1, m2, m3 = st.columns(3)
                         m1.metric("LAST MONTH", f"${last_close:,.0f}")
-                        m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
+                        
+                        if mom_pct is None:
+                            m2.metric("MoM %", "TRICKLE")
+                        else:
+                            m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
+                            
                         m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
+                        
+                        if trickle_flag and trickle_reason:
+                            st.caption(f"TRICKLE DETECTED: {trickle_reason}")
 
                         # CRITICAL FIX 2: Create a clean subset DF for Altair to prevent serialization errors
                         chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA6"]].copy()
