@@ -5,7 +5,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 import numpy as np
 from datetime import datetime, date
-import re
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -424,17 +423,6 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         
     return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy
 
-def sanitize_terminal_text(s: str) -> str:
-    if s is None:
-        return ""
-    s = str(s)
-    # remove zero-width + BOM + NBSP
-    s = s.replace("\u00a0", " ").replace("\ufeff", "")
-    s = re.sub(r"[\u200b-\u200d]", "", s)  # zero width
-    # kill newlines/tabs that can cause weird wraps
-    s = s.replace("\n", " ").replace("\r", " ").replace("\t", " ")
-    return s.strip()
-
 # -----------------------------------------------------------------------------
 # DATA PROCESSING WRAPPER
 # -----------------------------------------------------------------------------
@@ -533,45 +521,6 @@ def process_data(df_dash, df_act, df_deals):
     # Compute Printer metrics
     printer_metrics = {} # Key: did, Value: dict of metrics
     
-    def detect_trickle_first_month(receipts_list):
-        """
-        Approach A (Trickle detection):
-        - Floor rule: Month1 <= 50
-        - Explosive jump: Month2 >= 5x Month1 (but only if Month2 is meaningful)
-        - Tiny vs early baseline: Month1 < 10% of median(M2..M4), if baseline exists & meaningful
-        Returns: (is_trickle: bool, reason: str)
-        """
-        if not receipts_list or len(receipts_list) < 2:
-            return False, ""
-
-        m1 = float(receipts_list[0] or 0.0)
-        m2 = float(receipts_list[1] or 0.0)
-
-        TRICKLE_FLOOR = 50.0
-        JUMP_MULT = 5.0
-
-        # Guardrails to reduce false flags from tiny numbers
-        MIN_MEANINGFUL_M2_FOR_JUMP = 500.0      # prevents "80 -> 420" being flagged
-        MIN_BASELINE_FOR_TINY_TEST = 300.0      # prevents weird tiny baselines
-
-        # Rule 1: Hard floor
-        if m1 <= TRICKLE_FLOOR:
-            return True, f"TRICKLE_FLOOR (M1=${m1:,.0f} <= ${TRICKLE_FLOOR:,.0f})"
-
-        # Rule 2: Explosive jump (only if M2 is meaningful and M1 > 0)
-        if m1 > 0 and m2 >= MIN_MEANINGFUL_M2_FOR_JUMP and (m2 / m1) >= JUMP_MULT:
-            return True, f"EXPLOSIVE_JUMP (M2=${m2:,.0f} is {(m2/m1):.1f}x M1=${m1:,.0f})"
-
-        # Rule 3: Tiny vs early baseline (median of M2..M4)
-        baseline_window = receipts_list[1:4]  # months 2-4 (up to 3 values)
-        baseline_vals = [float(x) for x in baseline_window if x is not None]
-        if baseline_vals:
-            baseline_med = float(np.median(baseline_vals))
-            if baseline_med >= MIN_BASELINE_FOR_TINY_TEST and m1 < 0.10 * baseline_med:
-                return True, f"TINY_VS_BASELINE (M1=${m1:,.0f} < 10% of median(M2..M4)=${baseline_med:,.0f})"
-
-        return False, ""
-
     if not df_act.empty and 'Period End Date' in df_act.columns:
          valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
          if not valid_dates_act.empty:
@@ -596,58 +545,30 @@ def process_data(df_dash, df_act, df_deals):
                      else:
                          mom_pct = 0.0
                  
-                 # --- TRICKLE DETECTION (Month 1 only) ---
-                 receipts_list = group["Net Receipts"].astype(float).tolist()
-                 is_trickle, trickle_reason = detect_trickle_first_month(receipts_list)
-
-                 # --- SMA3 RAW vs ADJ ---
-                 # RAW: last 3 months as-is
                  if months_count >= 3:
-                     sma3_raw = float(np.mean(receipts_list[-3:]))
+                     sma3 = group.tail(3)['Net Receipts'].mean()
                  elif months_count > 0:
-                     sma3_raw = float(np.mean(receipts_list))
-                 else:
-                     sma3_raw = 0.0
+                     # Fallback if less than 3 months, use whatever avg we have for velocity map at least
+                     sma3 = group['Net Receipts'].mean()
 
-                 # ADJ: exclude Month 1 if trickle detected
-                 # (use up to last 3 months of the remaining series; if only 1 month remains, it's that value)
-                 if is_trickle and months_count >= 2:
-                     adj_series = receipts_list[1:]  # drop Month 1
-                 else:
-                     adj_series = receipts_list
-
-                 if len(adj_series) >= 3:
-                     sma3_adj = float(np.mean(adj_series[-3:]))
-                 elif len(adj_series) > 0:
-                     sma3_adj = float(np.mean(adj_series))
-                 else:
-                     sma3_adj = 0.0
-
-                 # Effective SMA used by the app (keeps existing logic intact)
-                 sma3_effective = sma3_adj if is_trickle else sma3_raw
-
-                 # Printer score uses effective SMA
-                 printer_score = (last_month_val / sma3_effective) if sma3_effective > 0 else 0.0
+                 if sma3 > 0:
+                     printer_score = last_month_val / sma3
                  
-                 # Velocity map used by Pace Metrics uses effective SMA
-                 velocity_map[did] = sma3_effective
+                 # Store for process_data usage
+                 velocity_map[did] = sma3
                  
                  # Printer Eligibility
                  # (MonthsCount >= 4) AND (SMA3 >= 500)
-                 is_printer = (months_count >= 4) and (sma3_effective >= 500)
+                 is_printer = (months_count >= 4) and (sma3 >= 500)
                  
                  printer_metrics[did] = {
                      'MonthsCount': months_count,
                      'LastMonth': last_month_val,
                      'PrevMonth': prev_month_val,
-                     'SMA3': sma3_effective,          # <— keep your existing downstream references working
-                     'SMA3_RAW': sma3_raw,            # <— add
-                     'SMA3_ADJ': sma3_adj,            # <— add
+                     'SMA3': sma3,
                      'PrinterScore': printer_score,
                      'MoM_pct': mom_pct,
-                     'IsPrinterEligible': is_printer,
-                     'TrickleDetected': is_trickle,
-                     'TrickleReason': trickle_reason
+                     'IsPrinterEligible': is_printer
                  }
     
     # --- NEW RECOUPMENT MAP LOGIC ---
@@ -703,13 +624,9 @@ def process_data(df_dash, df_act, df_deals):
     pm_last_month = []
     pm_prev_month = []
     pm_sma3 = []
-    pm_sma3_raw = []
-    pm_sma3_adj = []
     pm_score = []
     pm_mom = []
     pm_eligible = []
-    pm_trickle = []
-    pm_trickle_reason = []
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -723,21 +640,16 @@ def process_data(df_dash, df_act, df_deals):
         # Get printer metrics
         pm = printer_metrics.get(did, {
             'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
-            'SMA3': 0.0, 'SMA3_RAW': 0.0, 'SMA3_ADJ': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
-            'TrickleDetected': False, 'TrickleReason': ''
+            'SMA3': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False
         })
         
         pm_months_count.append(pm['MonthsCount'])
         pm_last_month.append(pm['LastMonth'])
         pm_prev_month.append(pm['PrevMonth'])
         pm_sma3.append(pm['SMA3'])
-        pm_sma3_raw.append(pm.get('SMA3_RAW', 0.0))
-        pm_sma3_adj.append(pm.get('SMA3_ADJ', 0.0))
         pm_score.append(pm['PrinterScore'])
         pm_mom.append(pm['MoM_pct'])
         pm_eligible.append(pm['IsPrinterEligible'])
-        pm_trickle.append(pm['TrickleDetected'])
-        pm_trickle_reason.append(pm['TrickleReason'])
         
         # Determine specific "Today" for this deal
         # If recouped, freeze time at recoupment date
@@ -777,13 +689,9 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['LastMonth'] = pm_last_month
     df_dash['PrevMonth'] = pm_prev_month
     df_dash['SMA3'] = pm_sma3
-    df_dash['SMA3_RAW'] = pm_sma3_raw
-    df_dash['SMA3_ADJ'] = pm_sma3_adj
     df_dash['PrinterScore'] = pm_score
     df_dash['MoM_pct'] = pm_mom
     df_dash['IsPrinterEligible'] = pm_eligible
-    df_dash['TrickleDetected'] = pm_trickle
-    df_dash['TrickleReason'] = pm_trickle_reason
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -1124,22 +1032,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         act["Close"] = pd.to_numeric(act["Net Receipts"], errors="coerce").fillna(0)
                         act["Open"] = act["Close"].shift(1)
 
-                        # --- TRICKLE VISUAL FIX (Approach A) ---
-                        # If Month 1 was flagged as trickle, we "ignore" it for comparisons by flattening Month2's candle:
-                        # Set Month2 Open = Month2 Close (prevents a giant "up candle" from a tiny/partial Month1)
-                        trickle_flag = False
-                        trickle_reason = ""
-                        # Pull trickle flag from DASHBOARD for the selected deal
-                        dash_row = eligible[eligible["did_norm"] == selected_id]
-                        if not dash_row.empty:
-                            trickle_flag = bool(dash_row.iloc[0].get("TrickleDetected", False))
-                            trickle_reason = str(dash_row.iloc[0].get("TrickleReason", "")).strip()
-                        
-                        if trickle_flag and len(act) >= 2:
-                            # act is sorted by date, so second row is month 2
-                            idx_m2 = act.index[1]
-                            act.loc[idx_m2, "Open"] = act.loc[idx_m2, "Close"]
-
                         # Candle body bounds
                         act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
                         act["BodyBot"] = act[["Open", "Close"]].min(axis=1)
@@ -1149,62 +1041,22 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         act["Low"] = act["BodyBot"]
 
                         # Moving averages
-                        act["SMA3_RAW"] = act["Close"].rolling(3).mean()
-                        if trickle_flag and len(act) >= 1:
-                            close_adj = act["Close"].copy()
-                            close_adj.iloc[0] = np.nan  # exclude Month 1
-                            # rolling mean ignores NaNs; min_periods=2 prevents Month2 from just echoing M2
-                            act["SMA3"] = close_adj.rolling(3, min_periods=2).mean()
-                        else:
-                            act["SMA3"] = act["SMA3_RAW"]
-                        
+                        act["SMA3"] = act["Close"].rolling(3).mean()
                         act["SMA6"] = act["Close"].rolling(6).mean()
 
                         # Headline stats
                         last_close = float(act["Close"].iloc[-1])
                         prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
-                        
-                        # If prior month is "trickle-ish", don’t print a nonsense MoM %
-                        # Condition: deal was trickle-flagged AND we’re still early enough that MoM compares against Month1
-                        mom_is_trickle = (trickle_flag and len(act) == 2)
-                        if mom_is_trickle:
-                            mom_pct = None
-                        else:
-                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
-                            
+                        mom_pct = ((last_close - prev_close) / prev_close) if prev_close else 0.0
                         sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
 
                         m1, m2, m3 = st.columns(3)
                         m1.metric("LAST MONTH", f"${last_close:,.0f}")
-                        
-                        if mom_pct is None:
-                            m2.metric("MoM %", "N/A (TRICKLE MONTH DETECTED)" if mom_is_trickle else "N/A")
-                        else:
-                            m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
-                            
+                        m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
                         m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
-                        
-                        if trickle_flag:
-                            safe_reason = sanitize_terminal_text(trickle_reason)
-                            st.markdown(
-                                f"""
-                                <div style="
-                                    margin-top: 6px;
-                                    color: #33ff00;
-                                    font-family: 'Courier New', monospace;
-                                    font-size: 12px;
-                                    white-space: nowrap;
-                                    word-break: normal;
-                                    overflow-x: auto;
-                                ">
-                                    TRICKLE DETECTED: {safe_reason if safe_reason else "TRUE"}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
 
                         # CRITICAL FIX 2: Create a clean subset DF for Altair to prevent serialization errors
-                        chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA3_RAW", "SMA6"]].copy()
+                        chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA6"]].copy()
                         # Ensure strictly datetime and reset index
                         chart_data['Period End Date'] = pd.to_datetime(chart_data['Period End Date'])
                         chart_data = chart_data.reset_index(drop=True)
@@ -1264,40 +1116,40 @@ def show_portfolio(df_dash, df_act, current_date_override):
                             .configure_axis(grid=False)
                         )
 
-                        # Headline stats
-                        last_close = float(act["Close"].iloc[-1])
-                        prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
+                        st.altair_chart(chart, use_container_width=True, theme=None)
+            
+            except Exception as e:
+                st.error(f"Error rendering Market Pulse chart: {str(e)}")
 
-                        # --- MoM TRICKLE GUARDRAIL (restored) ---
-                        TRICKLE_FLOOR = 50.0
-
-                        # Treat MoM as TRICKLE if the prior month is effectively a trickle denominator
-                        # (this fixes China: prev_close = 0.04)
-                        mom_is_trickle = (len(act) >= 2 and prev_close <= TRICKLE_FLOOR)
-
-                        if mom_is_trickle:
-                            mom_pct = None
-                        else:
-                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
-                            
-                        sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
-
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("LAST MONTH", f"${last_close:,.0f}")
-                        
-                        if mom_pct is None:
-                            m2.metric("MoM %", "N/A (TRICKLE MONTH DETECTED)" if mom_is_trickle else "N/A")
-                        else:
-                            m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
-                            
-                        m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
-                        
-                        if trickle_flag:
-                            safe_reason = sanitize_terminal_text(trickle_reason)
-                            st.markdown(
-                                f"""
-                                <div style="
-                                    margin-top: 6px;
+    # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
+    st.markdown("### > MARKET PULSE // PRINTERS NOW")
+    
+    if df_act.empty:
+        st.info("No ACTUALS data loaded.")
+    elif 'did_norm' not in df_act.columns:
+        st.error("ACTUALS is missing did_norm (normalization failed).")
+    else:
+        # 1. Filter Eligible Deals
+        printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
+        
+        if not printers_df.empty:
+            # 2. Sort by SMA3 desc, then Score
+            printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
+            top_printers = printers_df.head(12) # Top 12 only
+            
+            count_printers = len(printers_df)
+            
+            # Header Stats for Pulse
+            st.markdown(f"""
+            <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
+                <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
+                <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 3. Build Time Series Data for these Top Deals
+            target_dids = top_printers['did_norm'].unique()
+            # Filter actuals using normalized IDs
             act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
             
             if not act_subset.empty and 'Period End Date' in act_subset.columns:
@@ -1487,7 +1339,15 @@ def show_detail(df_dash, df_act, deal_id):
         # Using nth-of-type selector for reliability in targeting
         st.markdown("""
         <style>
+        /* Target the metric value in the 2nd metric of the 2nd row of columns */
         div[data-testid="stMetric"]:nth-of-type(1) div[data-testid="stMetricValue"] {
+             /* This targets the first metric in the container it's in. 
+                Since we are inside a column, it's the only metric in that column div.
+                We need a way to target THIS specific column. 
+                Streamlit CSS injection is global.
+                Best approach: Wrap in container and use a unique class or just accept green.
+                Request said: "it can go back to being green." so standard metric is fine.
+             */
              color: #33ff00 !important;
         }
         </style>
@@ -1559,15 +1419,12 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            # Replaced multi-line f-string with concatenated strings to prevent SyntaxError: invalid decimal literal
-            diag_html = (
-                f'<div class="diagnostic-box">'
-                f'<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>'
-                f'<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>'
-                f'<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>'
-                f'<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}'
-                '</div>'
-            )
+            diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
+</div>"""
             st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
