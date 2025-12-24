@@ -466,7 +466,7 @@ def process_data(df_dash, df_act, df_deals):
     if 'Deal ID' in df_dash.columns:
         df_dash['Deal ID'] = df_dash['Deal ID'].astype(str).str.strip()
 
-    # ADD NORMALIZED IDs (FIX for Market Pulse)
+    # ADD NORMALIZED IDs (FIX for Market Pulse & consistent joins)
     if 'Deal ID' in df_act.columns:
         df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
     if 'Deal ID' in df_dash.columns:
