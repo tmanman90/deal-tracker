@@ -171,7 +171,7 @@ st.markdown("""
     .deal-val-red { color: #ff3333; font-weight: bold; font-size: 1.1rem; }
     .deal-val-amber { color: #ffbf00; font-weight: bold; font-size: 1.1rem; }
     .deal-title { font-size: 1.3rem; font-weight: bold; color: #e6ffff; text-transform: uppercase; }
-
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -356,7 +356,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         return "N/A", 0.0, False, 0, 0.0, False
         
     # 4. Calculate Elapsed Months vs Benchmark (Whole Months Logic)
-    # Use override date (latest actuals date OR recoupment date if frozen) as today
+    # Use override date (latest actuals date) if provided, else today
     today = current_date_override if current_date_override else pd.Timestamp.now()
     
     if forecast_start > today:
@@ -502,11 +502,11 @@ def process_data(df_dash, df_act, df_deals):
     
     # Determine "Latest Data Date" from Actuals
     # This will be used as "Today" for calculating elapsed months
-    global_current_date = None
+    current_date_override = None
     if not df_act.empty and 'Period End Date' in df_act.columns:
          valid_dates_all = df_act.dropna(subset=['Period End Date'])
          if not valid_dates_all.empty:
-             global_current_date = valid_dates_all['Period End Date'].max()
+             current_date_override = valid_dates_all['Period End Date'].max()
              
     # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
     velocity_map = {}
@@ -514,6 +514,8 @@ def process_data(df_dash, df_act, df_deals):
          valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
          if not valid_dates_act.empty:
              # Group by Deal ID, take last 3, calc mean
+             # We need to ensure we are taking the last 3 chronologically
+             # Since we sorted by date above, tail(3) per group should work
              velocity_series = valid_dates_act.groupby('Deal ID').apply(lambda x: x.tail(3)['Net Receipts'].mean())
              velocity_map = velocity_series.to_dict()
     
@@ -581,7 +583,7 @@ def process_data(df_dash, df_act, df_deals):
         if recoup_date:
             deal_calc_date = recoup_date
         else:
-            deal_calc_date = global_current_date
+            deal_calc_date = current_date_override
         
         # Now returns 6 values including is_legacy
         # Pass deal_calc_date to fix "fractional month" / freeze logic
@@ -611,7 +613,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Target Amount'] = df_dash['Executed Advance']
     df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
     
-    return df_dash, df_act, global_current_date
+    return df_dash, df_act, current_date_override
 
 # -----------------------------------------------------------------------------
 # UI: PORTFOLIO PAGE
@@ -969,13 +971,9 @@ def show_detail(df_dash, df_act, deal_id):
     if 'Deal ID' not in df_dash.columns:
         st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
         return
-    
-    # Normalize ID for lookup
-    deal_id = str(deal_id).replace('\u00a0', ' ').strip()
-    
-    # Normalize DF ID column for robust matching
-    df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
-    deal_subset = df_dash[df_dash['did_norm'] == deal_id]
+        
+    deal_id = str(deal_id)
+    deal_subset = df_dash[df_dash['Deal ID'] == deal_id]
     
     if deal_subset.empty:
         st.error(f"ERROR: Deal ID {deal_id} not found in DASHBOARD.")
@@ -986,11 +984,8 @@ def show_detail(df_dash, df_act, deal_id):
 
     deal_row = deal_subset.iloc[0]
     deal_act = pd.DataFrame()
-    
-    # Ensure ID matching for actuals
     if not df_act.empty and 'Deal ID' in df_act.columns:
-        df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
-        deal_act = df_act[df_act['did_norm'] == deal_id].copy()
+        deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
     
     if st.button("<< RETURN TO DASHBOARD"):
         del st.session_state['selected_deal_id']
@@ -1043,15 +1038,26 @@ def show_detail(df_dash, df_act, deal_id):
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
     
     # CHANGE: Replace Remaining with Profit if Recouped
+    # Use custom CSS styling for specific Gold color. Using 'st.markdown' as metric delta color is limited.
     if is_recouped:
-        profit = cum_receipts = cum_val - adv_val
+        profit = cum_val - adv_val
         st.markdown(f"""
-        <div style="text-align: center;">
-            <p style="font-size: 0.8rem; margin-bottom: 0px; color: #ffbf00;">GENERATED PROFIT</p>
-            <p style="font-size: 1.6rem; font-weight: bold; color: #ffd700; margin-top: -5px;">${profit:,.0f}</p>
+        <style>
+        .gold-metric {{
+            background-color: #0d1117;
+            border: 1px solid #ffd700;
+            padding: 10px;
+            box-shadow: 2px 2px 0px #ffd700;
+            text-align: center;
+        }}
+        .gold-label {{ color: #ffbf00 !important; font-size: 0.8rem; font-weight: normal; }}
+        .gold-value {{ color: #ffd700 !important; font-size: 1.6rem; font-weight: bold; }}
+        </style>
+        <div class="gold-metric">
+            <div class="gold-label">GENERATED PROFIT</div>
+            <div class="gold-value">${profit:,.0f}</div>
         </div>
         """, unsafe_allow_html=True)
-        # Use empty placeholder for column metric to keep alignment if needed, or just custom HTML above
     else:
         row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
         
@@ -1116,13 +1122,22 @@ def show_detail(df_dash, df_act, deal_id):
             if tag_val:
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
-            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            diag_html = f"""<div class="diagnostic-box">
+            # CLEANED UP DIAGNOSTIC BOX
+            if is_recouped:
+                 # Recouped View: Simplified
+                 diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span>{artist_type_line}{legacy_flag}
+</div>"""
+            else:
+                 # Active View: Full Stats
+                 diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
 </div>"""
+            
             st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
@@ -1242,20 +1257,6 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-        
-    st.markdown("---")
-    
-    # Custom HTML for Debug Table
-    st.markdown(f"""
-    <div class="debug-container">
-        <span class="debug-title">🕵️ DEAL DETECTIVE (DEBUG)</span>
-        <div class="debug-row"><span class="debug-key">Forecast Start Date (Smart):</span> <span class="debug-val">{deal_row.get('Forecast Start Date')}</span></div>
-        <div class="debug-row"><span class="debug-key">Elapsed Months (Raw):</span> <span class="debug-val">{deal_row.get('Elapsed Months')}</span></div>
-        <div class="debug-row"><span class="debug-key">Effective Months (Mulligan):</span> <span class="debug-val">{max(0, deal_row.get('Elapsed Months',0) - 0.5)}</span></div>
-        <div class="debug-row"><span class="debug-key">Pace Ratio:</span> <span class="debug-val">{deal_row.get('Pace Ratio')}</span></div>
-        <div class="debug-row"><span class="debug-key">Target Amount:</span> <span class="debug-val">{deal_row.get('Target Amount')}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
