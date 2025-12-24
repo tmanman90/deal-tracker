@@ -171,7 +171,7 @@ st.markdown("""
     .deal-val-red { color: #ff3333; font-weight: bold; font-size: 1.1rem; }
     .deal-val-amber { color: #ffbf00; font-weight: bold; font-size: 1.1rem; }
     .deal-title { font-size: 1.3rem; font-weight: bold; color: #e6ffff; text-transform: uppercase; }
-    
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -356,7 +356,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         return "N/A", 0.0, False, 0, 0.0, False
         
     # 4. Calculate Elapsed Months vs Benchmark (Whole Months Logic)
-    # Use override date (latest actuals date) if provided, else today
+    # Use override date (latest actuals date OR recoupment date if frozen) as today
     today = current_date_override if current_date_override else pd.Timestamp.now()
     
     if forecast_start > today:
@@ -502,11 +502,11 @@ def process_data(df_dash, df_act, df_deals):
     
     # Determine "Latest Data Date" from Actuals
     # This will be used as "Today" for calculating elapsed months
-    current_date_override = None
+    global_current_date = None
     if not df_act.empty and 'Period End Date' in df_act.columns:
          valid_dates_all = df_act.dropna(subset=['Period End Date'])
          if not valid_dates_all.empty:
-             current_date_override = valid_dates_all['Period End Date'].max()
+             global_current_date = valid_dates_all['Period End Date'].max()
              
     # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
     velocity_map = {}
@@ -514,10 +514,29 @@ def process_data(df_dash, df_act, df_deals):
          valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
          if not valid_dates_act.empty:
              # Group by Deal ID, take last 3, calc mean
-             # We need to ensure we are taking the last 3 chronologically
-             # Since we sorted by date above, tail(3) per group should work
              velocity_series = valid_dates_act.groupby('Deal ID').apply(lambda x: x.tail(3)['Net Receipts'].mean())
              velocity_map = velocity_series.to_dict()
+    
+    # --- NEW RECOUPMENT MAP LOGIC ---
+    # Find the date when cumulative receipts >= executed advance
+    recoupment_map = {}
+    if not df_act.empty and 'Period End Date' in df_act.columns:
+        valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
+        if not valid_dates_act.empty:
+             # We need executed advance for comparison. 
+             # It's cleaner to iterate deals from dash and filter act
+             for _, row in df_dash.iterrows():
+                 did = str(row.get('Deal ID', ''))
+                 exec_adv = clean_currency(row.get('Executed Advance', 0))
+                 
+                 if exec_adv > 0:
+                     deal_txns = valid_dates_act[valid_dates_act['Deal ID'] == did].copy()
+                     if not deal_txns.empty:
+                         deal_txns['Cum'] = deal_txns['Net Receipts'].cumsum()
+                         # Find first row where Cum >= Exec Adv
+                         recouped_rows = deal_txns[deal_txns['Cum'] >= exec_adv]
+                         if not recouped_rows.empty:
+                             recoupment_map[did] = recouped_rows.iloc[0]['Period End Date']
 
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
@@ -543,7 +562,8 @@ def process_data(df_dash, df_act, df_deals):
     data_points_list = []
     expected_list = []
     legacy_list = []
-    recent_velocity_list = [] # Store velocity
+    recent_velocity_list = []
+    recouped_date_list = [] # Store recoupment date
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -554,9 +574,18 @@ def process_data(df_dash, df_act, df_deals):
         # Get velocity (default 0)
         recent_vel = velocity_map.get(did, 0.0)
         
+        # Determine specific "Today" for this deal
+        # If recouped, freeze time at recoupment date
+        recoup_date = recoupment_map.get(did)
+        
+        if recoup_date:
+            deal_calc_date = recoup_date
+        else:
+            deal_calc_date = global_current_date
+        
         # Now returns 6 values including is_legacy
-        # Pass current_date_override and recent_velocity
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override, recent_velocity=recent_vel)
+        # Pass deal_calc_date to fix "fractional month" / freeze logic
+        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, deal_calc_date, recent_velocity=recent_vel)
         
         grades.append(g)
         ratios.append(r)
@@ -566,6 +595,7 @@ def process_data(df_dash, df_act, df_deals):
         expected_list.append(exp_prog)
         legacy_list.append(is_leg)
         recent_velocity_list.append(recent_vel)
+        recouped_date_list.append(recoup_date) # Can be NaT/None
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
@@ -575,12 +605,13 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Expected Recoupment'] = expected_list
     df_dash['Is Legacy'] = legacy_list
     df_dash['Recent Velocity'] = recent_velocity_list
+    df_dash['Recoupment Date'] = recouped_date_list
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
     df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
     
-    return df_dash, df_act, current_date_override
+    return df_dash, df_act, global_current_date
 
 # -----------------------------------------------------------------------------
 # UI: PORTFOLIO PAGE
@@ -642,8 +673,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
         sort_opt = st.selectbox("SORT BY", ["Grade", "Remaining to BE", "% to BE", "Cum Receipts", "Delta Months"], index=0)
 
     # TAG FILTER LOGIC
-    # Extract unique tags from the Tags column (split by comma if needed, but assuming single value based on earlier convo)
-    # If comma separated, we'd need to split and explode. Assuming simple string matching for now based on 'AI' example.
     all_tags = []
     if 'Tags' in df_dash.columns:
         # Normalize and get unique non-empty tags
@@ -692,8 +721,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
 
     # Apply Tag Filter
     if tag_filter and 'Tags' in filtered.columns:
-        # Filter rows where the 'Tags' column contains ANY of the selected tags
-        # Case insensitive matching for robustness
         mask = pd.Series([False] * len(filtered))
         for t in tag_filter:
             mask = mask | filtered['Tags'].astype(str).str.contains(t, case=False, regex=False)
@@ -758,9 +785,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 elif overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.75: w_grade = "B"
+                elif overall_ratio >= 0.80: w_grade = "B"
+                elif overall_ratio >= 0.70: w_grade = "C+"
                 elif overall_ratio >= 0.60: w_grade = "C"
-                elif overall_ratio >= 0.40: w_grade = "D"
+                elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
                 
                 kpi5.metric("WEIGHTED GRADE", w_grade)
@@ -972,7 +1000,15 @@ def show_detail(df_dash, df_act, deal_id):
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
     
-    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
+    # --- TAGS IN TITLE ---
+    # Check for Tags and create badge if present
+    tag_val = str(deal_row.get('Tags', '')).strip()
+    tag_html = ""
+    if tag_val:
+        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
+
+    # Render Title with Tag
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -984,11 +1020,17 @@ def show_detail(df_dash, df_act, deal_id):
     cum_val = clean_currency(deal_row.get('Cum Receipts', 0))
     rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
     
+    # Check for Recoupment
+    is_recouped = False
+    recoup_date = deal_row.get('Recoupment Date')
+    if pd.notna(recoup_date) or rem_val <= 0:
+        is_recouped = True
+
     # NOTE: Header stats use '% to BE Clean' which now reflects Legacy logic automatically
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -999,7 +1041,20 @@ def show_detail(df_dash, df_act, deal_id):
 
     row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
-    row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
+    
+    # CHANGE: Replace Remaining with Profit if Recouped
+    if is_recouped:
+        profit = cum_receipts = cum_val - adv_val
+        st.markdown(f"""
+        <div style="text-align: center;">
+            <p style="font-size: 0.8rem; margin-bottom: 0px; color: #ffbf00;">GENERATED PROFIT</p>
+            <p style="font-size: 1.6rem; font-weight: bold; color: #ffd700; margin-top: -5px;">${profit:,.0f}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        # Use empty placeholder for column metric to keep alignment if needed, or just custom HTML above
+    else:
+        row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
+        
     row2_c3.metric("FORECAST START", start_date_str)
     row2_c4.metric("EST BREAKEVEN", be_date_str)
 
@@ -1159,8 +1214,17 @@ def show_detail(df_dash, df_act, deal_id):
             last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
             remaining = rem_val
             
-            if remaining <= 0:
-                st.success("STATUS: RECOUPED. TARGET ACHIEVED.")
+            # --- NEW RECOUPED LOGIC ---
+            if is_recouped:
+                elapsed = deal_row.get('Elapsed Months', 0)
+                
+                # Suggested Re-Up Logic
+                re_up_amt = last_rolling * 12
+                
+                st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
+                
+                st.info(f"**SUGGESTED RE-UP ADVANCE:** ${re_up_amt:,.0f} (Based on current velocity ${last_rolling:,.0f}/mo for 12 months)")
+                
             elif last_rolling > 0:
                 months_to_go = remaining / last_rolling
                 
