@@ -1052,15 +1052,14 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     # Combine layers
                     chart_layer = alt.layer(line_net, line_sma, points).resolve_scale(y='independent')
                     
-                    # Facet by Artist (Rows)
+                   # Facet by Artist (Rows)
                     final_chart = chart_layer.facet(
-                        row=alt.Row('Artist', title=None, header=alt.Header(
+                        row=alt.Row('Artist:N', title=None, header=alt.Header(
                             labelColor='#e6ffff', 
                             labelFontSize=12, 
                             labelAlign='left',
                             labelFont='Courier New'
-                        )),
-                        columns=1 # Force single column layout
+                        ))
                     ).properties(
                         width=300, # Fixed width for sparklines
                         height=40 
