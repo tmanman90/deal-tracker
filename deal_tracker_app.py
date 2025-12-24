@@ -133,7 +133,7 @@ st.markdown("""
         display: inline-block;
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
-        animation: ticker 30s linear infinite; 
+        animation: ticker 25s linear infinite; 
     }
     .ticker-item {
         display: inline-block;
