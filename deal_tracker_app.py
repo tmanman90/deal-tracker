@@ -25,7 +25,7 @@ st.markdown("""
     .stApp {
         background-color: #050a0e;
         color: #33ff00;
-        font-family: 'Courier New', Courier, monospace;
+        font-family: 'Courier New', Courier, monospace; /* Base font, inheritable */
     }
     
     /* CRT SCANLINE EFFECT OVERLAY */
@@ -43,19 +43,24 @@ st.markdown("""
         pointer-events: none;
     }
 
-    /* TYPOGRAPHY (don’t break Streamlit’s icon spans) */
-    h1, h2, h3, h4, h5, h6, p, div, label, li, a,
-    span:not(.material-icons):not([class*="material-icons"]):not([class*="material-symbol"]) {
+    /* TYPOGRAPHY */
+    /* Only force !important on text elements that Streamlit tries to make Sans-Serif */
+    h1, h2, h3, h4, h5, h6, p, label, li, a, .stMarkdown, .stDataFrame, input, button, textarea {
         font-family: 'Courier New', Courier, monospace !important;
         text-shadow: 0 0 2px #33ff00aa;
     }
+    
+    /* Exclude generic 'div' and 'span' from the !important rule above to prevent breaking icons.
+       User content in divs will inherit Courier from .stApp automatically. */
 
-    /* RESTORE STREAMLIT / BASEWEB ICON FONTS */
-    span.material-icons,
-    span[class*="material-icons"],
-    span[class*="material-symbol"] {
-        font-family: "Material Icons" !important;
+    /* EXPANDER ICON FIX */
+    /* Explicitly target the Streamlit expander arrow to ensure it uses the correct icon font */
+    div[data-testid="stExpander"] summary > span:first-child,
+    div[data-testid="stExpander"] summary > svg {
+        font-family: "Material Symbols Rounded", "Material Icons" !important;
         text-shadow: none !important;
+        font-weight: normal !important;
+        opacity: 1 !important;
     }
     
     h1 { color: #33ff00; letter-spacing: 2px; text-transform: uppercase; border-bottom: 2px solid #33ff00; padding-bottom: 10px; }
