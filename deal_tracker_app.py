@@ -1030,7 +1030,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         # Close = this month receipts
                         # Open  = prior month receipts
                         act["Close"] = pd.to_numeric(act["Net Receipts"], errors="coerce").fillna(0)
-                        act["Open"] = act["Close"].shift(1).fillna(0)
+                        act["Open"] = act["Close"].shift(1)
 
                         # Candle body bounds
                         act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
@@ -1064,6 +1064,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         # Make a compact month axis (Bloomberg feel)
                         chart_data["DateStr"] = chart_data["Period End Date"].dt.strftime("%b %y")
                         chart_data["MonthIndex"] = range(1, len(chart_data) + 1)
+                        
+                        # Remove the first month (which has no prior month to compare against)
+                        # This prevents the "giant green candle from zero" artifact
+                        chart_data = chart_data.dropna(subset=["Open"])
 
                         # Altair chart: terminal-style candles
                         base = alt.Chart(chart_data).encode(
