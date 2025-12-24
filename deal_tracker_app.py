@@ -1559,12 +1559,15 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            diag_html = f"""<div class="diagnostic-box">
-<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
-</div>"""
+            # Replaced multi-line f-string with concatenated strings to prevent SyntaxError: invalid decimal literal
+            diag_html = (
+                f'<div class="diagnostic-box">'
+                f'<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>'
+                f'<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>'
+                f'<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>'
+                f'<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}'
+                '</div>'
+            )
             st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
