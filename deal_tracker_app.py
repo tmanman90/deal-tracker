@@ -1061,12 +1061,17 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         chart_data['Period End Date'] = pd.to_datetime(chart_data['Period End Date'])
                         chart_data = chart_data.reset_index(drop=True)
 
+                        # Make a compact month axis (Bloomberg feel)
+                        chart_data["DateStr"] = chart_data["Period End Date"].dt.strftime("%b %y")
+                        chart_data["MonthIndex"] = range(1, len(chart_data) + 1)
+
                         # Altair chart: terminal-style candles
                         base = alt.Chart(chart_data).encode(
                             x=alt.X(
-                                "Period End Date:T",
+                                "DateStr:O",
                                 title=None,
-                                axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00")
+                                sort=None,
+                                axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00", labelAngle=0)
                             )
                         )
 
