@@ -436,7 +436,9 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     pace_ratio = max(cumulative_ratio, velocity_ratio)
         
     # --- GRADING BANDS (THE SAFE BET SCALE) ---
-    if pace_ratio >= 1.15: grade = "A+"
+    # A++: >= 2.0 (Recoup in 6 months or less)
+    if pace_ratio >= 2.0: grade = "A++"
+    elif pace_ratio >= 1.15: grade = "A+"
     elif pace_ratio >= 1.00: grade = "A"
     elif pace_ratio >= 0.90: grade = "B+"
     elif pace_ratio >= 0.75: grade = "B"
@@ -614,7 +616,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     # --- DEBUG DISPLAY: REPORTING DATE ---
     if current_date_override:
         current_date_str = current_date_override.strftime('%Y-%m-%d')
-        # st.caption(f"REPORTING DATE: {current_date_str}")
+        st.caption(f"REPORTING DATE: {current_date_str}")
     
     # --- TICKER TAPE ---
     ticker_items = []
@@ -627,19 +629,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
         for _, row in sorted_deals.iterrows():
             artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
             
-            # Use Pace Ratio for direction symbol logic
-            pace_ratio = row.get('Pace Ratio', 0)
-            if pace_ratio >= 1.0:
-                symbol = "▲" 
-            elif pace_ratio >= 0.90:
-                symbol = "▶" 
-            else:
-                symbol = "▼"
-                
+            symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
             pct = row.get('% to BE Clean', 0)
             if pd.isna(pct): pct = 0.0
             
-            # Simple format, no HTML coloring in string
             item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
             ticker_items.append(item)
     
@@ -703,8 +696,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
     elif sort_opt == "% to BE":
         sort_col = "% to BE Clean"
     elif sort_opt == "Grade":
-        # Custom Grade Sort
-        grade_order = {"A+": 1, "A": 2, "B+": 3, "B": 4, "C": 5, "D": 6, "F": 7, "WAITING": 8, "PENDING": 9, "N/A": 10}
+        # Custom Grade Sort - Updated A++
+        grade_order = {"A++": 0, "A+": 1, "A": 2, "B+": 3, "B": 4, "C": 5, "D": 6, "F": 7, "WAITING": 8, "PENDING": 9, "N/A": 10}
         filtered['Grade_Rank'] = filtered['Grade'].map(grade_order).fillna(99)
         sort_col = "Grade_Rank"
         ascending = True
@@ -749,13 +742,14 @@ def show_portfolio(df_dash, df_act, current_date_override):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                if overall_ratio >= 1.15: w_grade = "A+"
+                # Updated weighted grade scale
+                if overall_ratio >= 2.00: w_grade = "A++"
+                elif overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.80: w_grade = "B"
-                elif overall_ratio >= 0.70: w_grade = "C+"
+                elif overall_ratio >= 0.75: w_grade = "B"
                 elif overall_ratio >= 0.60: w_grade = "C"
-                elif overall_ratio >= 0.50: w_grade = "D"
+                elif overall_ratio >= 0.40: w_grade = "D"
                 else: w_grade = "F"
                 
                 kpi5.metric("WEIGHTED GRADE", w_grade)
@@ -798,8 +792,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         
-        # Updated grade color logic (Stricter)
-        if grade in ["A+", "A", "B+"]:
+        # Updated grade color logic (Stricter + A++)
+        if grade in ["A++", "A+", "A", "B+"]:
             grade_color = "#33ff00" # Green
         elif grade == "B":
             grade_color = "#ffbf00" # Amber (Warning)
@@ -967,7 +961,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
