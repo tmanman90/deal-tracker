@@ -508,16 +508,61 @@ def process_data(df_dash, df_act, df_deals):
          if not valid_dates_all.empty:
              current_date_override = valid_dates_all['Period End Date'].max()
              
-    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
+    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal) & PRINTER METRICS
     velocity_map = {}
+    
+    # Compute Printer metrics
+    printer_metrics = {} # Key: did, Value: dict of metrics
+    
     if not df_act.empty and 'Period End Date' in df_act.columns:
          valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
          if not valid_dates_act.empty:
-             # Group by Deal ID, take last 3, calc mean
-             # We need to ensure we are taking the last 3 chronologically
-             # Since we sorted by date above, tail(3) per group should work
-             velocity_series = valid_dates_act.groupby('Deal ID').apply(lambda x: x.tail(3)['Net Receipts'].mean())
-             velocity_map = velocity_series.to_dict()
+             # Calculate metrics per deal
+             for did, group in valid_dates_act.groupby('Deal ID'):
+                 group = group.sort_values('Period End Date')
+                 months_count = len(group)
+                 
+                 last_month_val = 0.0
+                 prev_month_val = 0.0
+                 sma3 = 0.0
+                 printer_score = 0.0
+                 mom_pct = 0.0
+                 
+                 if months_count > 0:
+                     last_month_val = group.iloc[-1]['Net Receipts']
+                 
+                 if months_count >= 2:
+                     prev_month_val = group.iloc[-2]['Net Receipts']
+                     if prev_month_val > 0:
+                         mom_pct = (last_month_val - prev_month_val) / prev_month_val
+                     else:
+                         mom_pct = 0.0
+                 
+                 if months_count >= 3:
+                     sma3 = group.tail(3)['Net Receipts'].mean()
+                 elif months_count > 0:
+                     # Fallback if less than 3 months, use whatever avg we have for velocity map at least
+                     sma3 = group['Net Receipts'].mean()
+
+                 if sma3 > 0:
+                     printer_score = last_month_val / sma3
+                 
+                 # Store for process_data usage
+                 velocity_map[did] = sma3
+                 
+                 # Printer Eligibility
+                 # (MonthsCount >= 4) AND (SMA3 >= 500)
+                 is_printer = (months_count >= 4) and (sma3 >= 500)
+                 
+                 printer_metrics[did] = {
+                     'MonthsCount': months_count,
+                     'LastMonth': last_month_val,
+                     'PrevMonth': prev_month_val,
+                     'SMA3': sma3,
+                     'PrinterScore': printer_score,
+                     'MoM_pct': mom_pct,
+                     'IsPrinterEligible': is_printer
+                 }
     
     # --- NEW RECOUPMENT MAP LOGIC ---
     # Find the date when cumulative receipts >= executed advance
@@ -567,6 +612,15 @@ def process_data(df_dash, df_act, df_deals):
     recent_velocity_list = []
     recouped_date_list = [] # Store recoupment date
     
+    # Printer Metric Lists
+    pm_months_count = []
+    pm_last_month = []
+    pm_prev_month = []
+    pm_sma3 = []
+    pm_score = []
+    pm_mom = []
+    pm_eligible = []
+    
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
         
@@ -575,6 +629,20 @@ def process_data(df_dash, df_act, df_deals):
         
         # Get velocity (default 0)
         recent_vel = velocity_map.get(did, 0.0)
+        
+        # Get printer metrics
+        pm = printer_metrics.get(did, {
+            'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
+            'SMA3': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False
+        })
+        
+        pm_months_count.append(pm['MonthsCount'])
+        pm_last_month.append(pm['LastMonth'])
+        pm_prev_month.append(pm['PrevMonth'])
+        pm_sma3.append(pm['SMA3'])
+        pm_score.append(pm['PrinterScore'])
+        pm_mom.append(pm['MoM_pct'])
+        pm_eligible.append(pm['IsPrinterEligible'])
         
         # Determine specific "Today" for this deal
         # If recouped, freeze time at recoupment date
@@ -608,6 +676,15 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Is Legacy'] = legacy_list
     df_dash['Recent Velocity'] = recent_velocity_list
     df_dash['Recoupment Date'] = recouped_date_list
+    
+    # Add Printer Columns
+    df_dash['MonthsCount'] = pm_months_count
+    df_dash['LastMonth'] = pm_last_month
+    df_dash['PrevMonth'] = pm_prev_month
+    df_dash['SMA3'] = pm_sma3
+    df_dash['PrinterScore'] = pm_score
+    df_dash['MoM_pct'] = pm_mom
+    df_dash['IsPrinterEligible'] = pm_eligible
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -873,97 +950,128 @@ def show_portfolio(df_dash, df_act, current_date_override):
 
     st.markdown("---")
 
-    # --- MARKET PULSE (Moved to Bottom) ---
-    st.markdown("### > MARKET PULSE")
+    # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
+    st.markdown("### > MARKET PULSE // PRINTERS NOW")
     
-    if not df_act.empty and not df_dash.empty:
-        pulse_data = []
-        if 'Deal ID' in df_dash.columns:
-            df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+    # 1. Filter Eligible Deals
+    printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
+    
+    if not printers_df.empty:
+        # 2. Sort by SMA3 desc, then Score
+        printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
+        top_printers = printers_df.head(12) # Top 12 only
         
-        active_ids = df_dash['did_norm'].unique()
+        count_printers = len(printers_df)
         
-        if 'Deal ID' in df_act.columns:
-            df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+        # Header Stats for Pulse
+        st.markdown(f"""
+        <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
+            <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
+            <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
+        </div>
+        """, unsafe_allow_html=True)
         
-        for did in active_ids:
-            if not did or did.lower() == 'nan': continue
+        # 3. Build Time Series Data for these Top Deals
+        if not df_act.empty and 'did_norm' in df_act.columns:
+            target_dids = top_printers['did_norm'].unique()
+            # Filter actuals
+            act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
             
-            deal_subset = df_act[df_act['did_norm'] == did].copy()
-            if not deal_subset.empty:
-                if 'Period End Date' in deal_subset.columns:
-                    deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
+            if not act_subset.empty and 'Period End Date' in act_subset.columns:
+                # Ensure date sort
+                act_subset = act_subset.sort_values('Period End Date')
+                
+                final_ts_data = []
+                
+                for did in target_dids:
+                    # Get Deal Info
+                    deal_info = top_printers[top_printers['did_norm'] == did].iloc[0]
+                    artist_name = deal_info.get('Artist / Project', deal_info.get('Artist', 'Unknown'))
                     
-                    # Need Target Amount to calculate % Recouped
-                    # UPDATED: Use Executed Advance here too for consistency with Pulse Chart
-                    adv_row = df_dash[df_dash['did_norm'] == did]
-                    if not adv_row.empty:
-                        target_amt = adv_row.iloc[0].get('Target Amount', 0)
-                        if target_amt > 0:
-                            deal_subset['CumNet'] = deal_subset['Net Receipts'].cumsum()
-                            deal_subset['PctRecouped'] = deal_subset['CumNet'] / target_amt
+                    # Get Rows
+                    rows = act_subset[act_subset['did_norm'] == did].copy()
+                    
+                    if not rows.empty:
+                        # Compute rolling SMA3 for the line overlay
+                        rows['SMA3_series'] = rows['Net Receipts'].rolling(window=3).mean()
+                        
+                        # Take last 12 months max
+                        rows = rows.tail(12)
+                        
+                        # Add to list
+                        for _, r in rows.iterrows():
+                            final_ts_data.append({
+                                'Artist': artist_name,
+                                'did_norm': did,
+                                'DateStr': r['Period End Date'].strftime('%b %y'),
+                                'Net Receipts': r['Net Receipts'],
+                                'SMA3_series': r['SMA3_series'] if pd.notna(r['SMA3_series']) else 0
+                            })
                             
-                            for i, (idx, row) in enumerate(deal_subset.iterrows()):
-                                artist_label = adv_row.iloc[0].get('Artist / Project', 
-                                              adv_row.iloc[0].get('Artist', 
-                                              adv_row.iloc[0].get('Project', did)))
-                                
-                                pulse_data.append({
-                                    'Deal ID': did,
-                                    'MonthIndex': i + 1, 
-                                    'PctRecouped': row['PctRecouped'],
-                                    'Artist': artist_label
-                                })
-
-        if pulse_data:
-            pulse_df = pd.DataFrame(pulse_data)
-            
-            neon_range = ['#39FF14', '#00FFFF', '#FF00FF', '#FFFFFF', '#FFFF00']
-            
-            lines = alt.Chart(pulse_df).mark_line(
-                interpolate='linear', 
-                strokeWidth=2
-            ).encode(
-                x=alt.X('MonthIndex', title='Months Since Launch', axis=alt.Axis(
-                    domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4],
-                    labelColor='#33ff00', titleColor='#ffbf00'
-                )),
-                y=alt.Y('PctRecouped', title='Recoupment %', axis=alt.Axis(
-                    format='%', domain=False, tickSize=0, grid=True, gridColor='#333333', gridDash=[4, 4],
-                    labelColor='#33ff00', titleColor='#ffbf00'
-                )),
-                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None),
-                tooltip=['Artist', 'MonthIndex', alt.Tooltip('PctRecouped', format='.1%')]
-            )
-            
-            area = alt.Chart(pulse_df).mark_area(
-                interpolate='linear',
-                opacity=0.1,
-                color=alt.Gradient(
-                    gradient='linear',
-                    stops=[alt.GradientStop(color='#33ff00', offset=0),
-                           alt.GradientStop(color='rgba(0, 0, 0, 0)', offset=1)],
-                    x1=1, x2=1, y1=1, y2=0
-                )
-            ).encode(
-                x='MonthIndex',
-                y='PctRecouped',
-                color=alt.Color('Artist', scale=alt.Scale(range=neon_range), legend=None)
-            )
-            
-            pulse_chart = (area + lines).properties(
-                height=300,
-                width='container',
-                background='transparent'
-            ).configure_view(
-                strokeWidth=0,
-                fill=None
-            )
-            
-            st.altair_chart(pulse_chart, use_container_width=True, theme=None)
-        else:
-            st.info("No transaction data available for Pulse Chart.")
-
+                if final_ts_data:
+                    ts_df = pd.DataFrame(final_ts_data)
+                    
+                    # 4. Create Bloomberg-style Sparklines (Small Multiples)
+                    
+                    # Base Chart
+                    base = alt.Chart(ts_df).encode(
+                        x=alt.X('DateStr', sort=None, title=None, axis=None) # Hide X axis labels for sparkline feel
+                    )
+                    
+                    # Neon Green Line (Actuals)
+                    line_net = base.mark_line(
+                        color='#39FF14', 
+                        strokeWidth=2,
+                        interpolate='linear'
+                    ).encode(
+                        y=alt.Y('Net Receipts', title=None, axis=None) # Hide Y axis too
+                    )
+                    
+                    # Amber Dashed Line (SMA3)
+                    line_sma = base.mark_line(
+                        color='#ffbf00',
+                        strokeWidth=1,
+                        strokeDash=[2, 2],
+                        interpolate='linear'
+                    ).encode(
+                        y=alt.Y('SMA3_series', title=None, axis=None)
+                    )
+                    
+                    # Tooltip layer (transparent points)
+                    points = base.mark_point(opacity=0).encode(
+                        y='Net Receipts',
+                        tooltip=['Artist', 'DateStr', 'Net Receipts', 'SMA3_series']
+                    )
+                    
+                    # Combine layers
+                    chart_layer = alt.layer(line_net, line_sma, points)
+                    
+                    # Facet by Artist (Rows)
+                    final_chart = chart_layer.facet(
+                        row=alt.Row('Artist', title=None, header=alt.Header(
+                            labelColor='#e6ffff', 
+                            labelFontSize=12, 
+                            labelAlign='left',
+                            labelFont='Courier New'
+                        ))
+                    ).properties(
+                        width='container',
+                        height=40 # Small height for bloomberg row look
+                    ).configure_view(
+                        strokeWidth=0
+                    ).configure_facet(
+                        spacing=5
+                    )
+                    
+                    st.altair_chart(final_chart, use_container_width=True, theme=None)
+                    
+                else:
+                    st.info("No timeline data available for top printer deals.")
+            else:
+                st.info("No actuals data found for eligible deals.")
+    else:
+        st.info("No deals meet the $500 SMA(3) threshold yet.")
+        
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
@@ -971,9 +1079,13 @@ def show_detail(df_dash, df_act, deal_id):
     if 'Deal ID' not in df_dash.columns:
         st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
         return
-        
-    deal_id = str(deal_id)
-    deal_subset = df_dash[df_dash['Deal ID'] == deal_id]
+    
+    # Normalize ID for lookup
+    deal_id = str(deal_id).replace('\u00a0', ' ').strip()
+    
+    # Normalize DF ID column for robust matching
+    df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+    deal_subset = df_dash[df_dash['did_norm'] == deal_id]
     
     if deal_subset.empty:
         st.error(f"ERROR: Deal ID {deal_id} not found in DASHBOARD.")
@@ -984,8 +1096,11 @@ def show_detail(df_dash, df_act, deal_id):
 
     deal_row = deal_subset.iloc[0]
     deal_act = pd.DataFrame()
+    
+    # Ensure ID matching for actuals
     if not df_act.empty and 'Deal ID' in df_act.columns:
-        deal_act = df_act[df_act['Deal ID'] == deal_id].copy()
+        df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+        deal_act = df_act[df_act['did_norm'] == deal_id].copy()
     
     if st.button("<< RETURN TO DASHBOARD"):
         del st.session_state['selected_deal_id']
@@ -995,7 +1110,15 @@ def show_detail(df_dash, df_act, deal_id):
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
     
-    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
+    # --- TAGS IN TITLE ---
+    # Check for Tags and create badge if present
+    tag_val = str(deal_row.get('Tags', '')).strip()
+    tag_html = ""
+    if tag_val:
+        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
+
+    # Render Title with Tag
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
