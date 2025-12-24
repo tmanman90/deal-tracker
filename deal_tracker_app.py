@@ -591,7 +591,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     # --- DEBUG DISPLAY: REPORTING DATE ---
     if current_date_override:
         current_date_str = current_date_override.strftime('%Y-%m-%d')
-        st.caption(f"REPORTING DATE: {current_date_str}")
+        # st.caption(f"REPORTING DATE: {current_date_str}")
     
     # --- TICKER TAPE ---
     ticker_items = []
@@ -717,7 +717,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                # Updated weighted grade scale
                 if overall_ratio >= 2.00: w_grade = "A++"
                 elif overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
