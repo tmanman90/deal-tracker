@@ -1254,35 +1254,13 @@ def show_detail(df_dash, df_act, deal_id):
             if tag_val:
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
-            # CLEANED UP DIAGNOSTIC BOX
-            if is_recouped:
-                 # Calculate Suggested Re-Up
-                 # Need last rolling avg. Can get from deal_act or pass it in.
-                 # Re-calculate quickly here for display simplicity
-                 re_up_str = "N/A"
-                 if not deal_act.empty and 'Net Receipts' in deal_act.columns:
-                     # Sort by date to ensure last 3 are correct
-                     if 'Period End Date' in deal_act.columns:
-                        da_sorted = deal_act.sort_values('Period End Date')
-                        last_3_avg = da_sorted.tail(3)['Net Receipts'].mean()
-                        re_up_val = last_3_avg * 12
-                        re_up_str = f"${re_up_val:,.0f}"
-                 
-                 # Recouped View: Simplified + Re-Up
-                 diag_html = f"""<div class="diagnostic-box">
-<span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color:#ffbf00;">{re_up_str}</span>{artist_type_line}{legacy_flag}
-</div>"""
-            else:
-                 # Active View: Full Stats
-                 diag_html = f"""<div class="diagnostic-box">
+            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
+            diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
 <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
 </div>"""
-            
             st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
