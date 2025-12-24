@@ -626,7 +626,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("---")
     
     # --- FILTERS ---
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
     
     with col1:
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
@@ -640,6 +640,21 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     with col4:
         sort_opt = st.selectbox("SORT BY", ["Grade", "Remaining to BE", "% to BE", "Cum Receipts", "Delta Months"], index=0)
+
+    # TAG FILTER LOGIC
+    # Extract unique tags from the Tags column (split by comma if needed, but assuming single value based on earlier convo)
+    # If comma separated, we'd need to split and explode. Assuming simple string matching for now based on 'AI' example.
+    all_tags = []
+    if 'Tags' in df_dash.columns:
+        # Normalize and get unique non-empty tags
+        raw_tags = df_dash['Tags'].dropna().astype(str).unique()
+        for t in raw_tags:
+            if t.strip():
+                all_tags.append(t.strip())
+        all_tags = sorted(list(set(all_tags)))
+        
+    with col5:
+        tag_filter = st.multiselect("TAGS", all_tags, default=[])
     
     # Filter Logic
     filtered = df_dash.copy()
@@ -674,6 +689,15 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     if eligible_only:
         filtered = filtered[filtered['Is Eligible'] == True]
+
+    # Apply Tag Filter
+    if tag_filter and 'Tags' in filtered.columns:
+        # Filter rows where the 'Tags' column contains ANY of the selected tags
+        # Case insensitive matching for robustness
+        mask = pd.Series([False] * len(filtered))
+        for t in tag_filter:
+            mask = mask | filtered['Tags'].astype(str).str.contains(t, case=False, regex=False)
+        filtered = filtered[mask]
         
     # Sort Logic
     ascending = False
@@ -730,13 +754,13 @@ def show_portfolio(df_dash, df_act, current_date_override):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                if overall_ratio >= 1.15: w_grade = "A+"
+                if overall_ratio >= 2.00: w_grade = "A++"
+                elif overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.80: w_grade = "B"
-                elif overall_ratio >= 0.70: w_grade = "C+"
+                elif overall_ratio >= 0.75: w_grade = "B"
                 elif overall_ratio >= 0.60: w_grade = "C"
-                elif overall_ratio >= 0.50: w_grade = "D"
+                elif overall_ratio >= 0.40: w_grade = "D"
                 else: w_grade = "F"
                 
                 kpi5.metric("WEIGHTED GRADE", w_grade)
@@ -841,6 +865,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
                     
                     # Need Target Amount to calculate % Recouped
+                    # UPDATED: Use Executed Advance here too for consistency with Pulse Chart
                     adv_row = df_dash[df_dash['did_norm'] == did]
                     if not adv_row.empty:
                         target_amt = adv_row.iloc[0].get('Target Amount', 0)
@@ -1153,6 +1178,20 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
+        
+    st.markdown("---")
+    
+    # Custom HTML for Debug Table
+    st.markdown(f"""
+    <div class="debug-container">
+        <span class="debug-title">🕵️ DEAL DETECTIVE (DEBUG)</span>
+        <div class="debug-row"><span class="debug-key">Forecast Start Date (Smart):</span> <span class="debug-val">{deal_row.get('Forecast Start Date')}</span></div>
+        <div class="debug-row"><span class="debug-key">Elapsed Months (Raw):</span> <span class="debug-val">{deal_row.get('Elapsed Months')}</span></div>
+        <div class="debug-row"><span class="debug-key">Effective Months (Mulligan):</span> <span class="debug-val">{max(0, deal_row.get('Elapsed Months',0) - 0.5)}</span></div>
+        <div class="debug-row"><span class="debug-key">Pace Ratio:</span> <span class="debug-val">{deal_row.get('Pace Ratio')}</span></div>
+        <div class="debug-row"><span class="debug-key">Target Amount:</span> <span class="debug-val">{deal_row.get('Target Amount')}</span></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
