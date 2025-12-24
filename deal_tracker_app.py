@@ -309,7 +309,6 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     
     # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
     
-    target_amount = 0.0
     target_months = 12.0 # Default
     is_legacy = False
     
@@ -318,14 +317,10 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     sel_adv_raw = row.get('Selected Advance', '')
     sel_adv = clean_currency(sel_adv_raw)
     
-    # Explicit Logic:
-    # If we have a Strategy AND a valid Selected Advance > 0, it is an ANALYZER deal.
-    # Otherwise, it is a LEGACY deal.
-    
+    # Check if deal is analyzed (has strategy and selected advance)
     if strat and sel_adv > 0:
         # ANALYZER MODE
         is_legacy = False
-        target_amount = sel_adv
         
         # Use Label Breakeven Months if available, else 12
         lbm = row.get('Label Breakeven Months', 12)
@@ -340,8 +335,6 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     else:
         # LEGACY MODE
         is_legacy = True
-        # Use Executed Advance as the target
-        target_amount = clean_currency(row.get('Executed Advance', 0))
         target_months = 12.0
 
     # 3. Parse Dates
@@ -383,7 +376,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     expected_progress = min(1.0, expected_progress)
     
     # 5. Actual progress (Cumulative)
-    # Always use Executed Advance as target amount for actual progress
+    # UPDATED: Always use Executed Advance as target amount for actual progress
     target_amount_for_grading = clean_currency(row.get('Executed Advance', 0))
     cum_receipts = clean_currency(row.get('Cum Receipts', 0))
     
