@@ -560,6 +560,7 @@ def process_data(df_dash, df_act, df_deals):
     data_points_list = []
     expected_list = []
     legacy_list = []
+    recent_velocity_list = [] # Store velocity
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -581,6 +582,7 @@ def process_data(df_dash, df_act, df_deals):
         data_points_list.append(count)
         expected_list.append(exp_prog)
         legacy_list.append(is_leg)
+        recent_velocity_list.append(recent_vel)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
@@ -589,6 +591,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Data Points Found'] = data_points_list 
     df_dash['Expected Recoupment'] = expected_list
     df_dash['Is Legacy'] = legacy_list
+    df_dash['Recent Velocity'] = recent_velocity_list
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -602,11 +605,6 @@ def process_data(df_dash, df_act, df_deals):
 def show_portfolio(df_dash, df_act, current_date_override):
     st.title(">>> GLOBAL DEAL TRACKER_")
     
-    # --- DEBUG DISPLAY: REPORTING DATE ---
-    if current_date_override:
-        current_date_str = current_date_override.strftime('%Y-%m-%d')
-        st.caption(f"REPORTING DATE: {current_date_str}")
-    
     # --- TICKER TAPE ---
     ticker_items = []
     if not df_dash.empty:
@@ -618,17 +616,29 @@ def show_portfolio(df_dash, df_act, current_date_override):
         for _, row in sorted_deals.iterrows():
             artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
             
-            symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
+            # Use Pace Ratio for direction symbol logic
+            pace_ratio = row.get('Pace Ratio', 0)
+            if pace_ratio >= 1.0:
+                symbol = "▲" 
+            elif pace_ratio >= 0.90:
+                symbol = "▶" 
+            else:
+                symbol = "▼"
+                
             pct = row.get('% to BE Clean', 0)
             if pd.isna(pct): pct = 0.0
             
+            # Simple format, no HTML coloring in string
             item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
             ticker_items.append(item)
+    
+    # Duplicate items for smoother infinite scroll illusion
+    full_ticker_list = ticker_items + ticker_items 
     
     ticker_html = f"""
     <div class="ticker-wrap">
         <div class="ticker">
-            <span class="ticker-item">{' &nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp; '.join(ticker_items)}</span>
+            <span class="ticker-item">{' &nbsp;&nbsp;&nbsp; /// &nbsp;&nbsp;&nbsp; '.join(full_ticker_list)}</span>
         </div>
     </div>
     """
@@ -975,7 +985,7 @@ def show_detail(df_dash, df_act, deal_id):
         
         chart_val = min(1.0, max(0.0, actual_recoup))
         
-        if pace_ratio < 0.70:
+        if pace_ratio < 0.60:
             bar_color = 'red' 
         elif pace_ratio < 0.90:
             bar_color = 'orange' 
