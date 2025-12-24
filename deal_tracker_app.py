@@ -5,6 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import numpy as np
 from datetime import datetime, date
+import re
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -423,6 +424,17 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         
     return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy
 
+def sanitize_terminal_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    # remove zero-width + BOM + NBSP
+    s = s.replace("\u00a0", " ").replace("\ufeff", "")
+    s = re.sub(r"[\u200b-\u200d]", "", s)  # zero width
+    # kill newlines/tabs that can cause weird wraps
+    s = s.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    return s.strip()
+
 # -----------------------------------------------------------------------------
 # DATA PROCESSING WRAPPER
 # -----------------------------------------------------------------------------
@@ -584,31 +596,53 @@ def process_data(df_dash, df_act, df_deals):
                      else:
                          mom_pct = 0.0
                  
-                 if months_count >= 3:
-                     sma3 = group.tail(3)['Net Receipts'].mean()
-                 elif months_count > 0:
-                     # Fallback if less than 3 months, use whatever avg we have for velocity map at least
-                     sma3 = group['Net Receipts'].mean()
-
-                 if sma3 > 0:
-                     printer_score = last_month_val / sma3
-                 
-                 # Store for process_data usage
-                 velocity_map[did] = sma3
-                 
-                 # Printer Eligibility
-                 # (MonthsCount >= 4) AND (SMA3 >= 500)
-                 is_printer = (months_count >= 4) and (sma3 >= 500)
-                 
                  # --- TRICKLE DETECTION (Month 1 only) ---
                  receipts_list = group["Net Receipts"].astype(float).tolist()
                  is_trickle, trickle_reason = detect_trickle_first_month(receipts_list)
 
+                 # --- SMA3 RAW vs ADJ ---
+                 # RAW: last 3 months as-is
+                 if months_count >= 3:
+                     sma3_raw = float(np.mean(receipts_list[-3:]))
+                 elif months_count > 0:
+                     sma3_raw = float(np.mean(receipts_list))
+                 else:
+                     sma3_raw = 0.0
+
+                 # ADJ: exclude Month 1 if trickle detected
+                 # (use up to last 3 months of the remaining series; if only 1 month remains, it's that value)
+                 if is_trickle and months_count >= 2:
+                     adj_series = receipts_list[1:]  # drop Month 1
+                 else:
+                     adj_series = receipts_list
+
+                 if len(adj_series) >= 3:
+                     sma3_adj = float(np.mean(adj_series[-3:]))
+                 elif len(adj_series) > 0:
+                     sma3_adj = float(np.mean(adj_series))
+                 else:
+                     sma3_adj = 0.0
+
+                 # Effective SMA used by the app (keeps existing logic intact)
+                 sma3_effective = sma3_adj if is_trickle else sma3_raw
+
+                 # Printer score uses effective SMA
+                 printer_score = (last_month_val / sma3_effective) if sma3_effective > 0 else 0.0
+                 
+                 # Velocity map used by Pace Metrics uses effective SMA
+                 velocity_map[did] = sma3_effective
+                 
+                 # Printer Eligibility
+                 # (MonthsCount >= 4) AND (SMA3 >= 500)
+                 is_printer = (months_count >= 4) and (sma3_effective >= 500)
+                 
                  printer_metrics[did] = {
                      'MonthsCount': months_count,
                      'LastMonth': last_month_val,
                      'PrevMonth': prev_month_val,
-                     'SMA3': sma3,
+                     'SMA3': sma3_effective,          # <— keep your existing downstream references working
+                     'SMA3_RAW': sma3_raw,            # <— add
+                     'SMA3_ADJ': sma3_adj,            # <— add
                      'PrinterScore': printer_score,
                      'MoM_pct': mom_pct,
                      'IsPrinterEligible': is_printer,
@@ -669,6 +703,8 @@ def process_data(df_dash, df_act, df_deals):
     pm_last_month = []
     pm_prev_month = []
     pm_sma3 = []
+    pm_sma3_raw = []
+    pm_sma3_adj = []
     pm_score = []
     pm_mom = []
     pm_eligible = []
@@ -687,7 +723,7 @@ def process_data(df_dash, df_act, df_deals):
         # Get printer metrics
         pm = printer_metrics.get(did, {
             'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
-            'SMA3': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
+            'SMA3': 0.0, 'SMA3_RAW': 0.0, 'SMA3_ADJ': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
             'TrickleDetected': False, 'TrickleReason': ''
         })
         
@@ -695,6 +731,8 @@ def process_data(df_dash, df_act, df_deals):
         pm_last_month.append(pm['LastMonth'])
         pm_prev_month.append(pm['PrevMonth'])
         pm_sma3.append(pm['SMA3'])
+        pm_sma3_raw.append(pm.get('SMA3_RAW', 0.0))
+        pm_sma3_adj.append(pm.get('SMA3_ADJ', 0.0))
         pm_score.append(pm['PrinterScore'])
         pm_mom.append(pm['MoM_pct'])
         pm_eligible.append(pm['IsPrinterEligible'])
@@ -739,6 +777,8 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['LastMonth'] = pm_last_month
     df_dash['PrevMonth'] = pm_prev_month
     df_dash['SMA3'] = pm_sma3
+    df_dash['SMA3_RAW'] = pm_sma3_raw
+    df_dash['SMA3_ADJ'] = pm_sma3_adj
     df_dash['PrinterScore'] = pm_score
     df_dash['MoM_pct'] = pm_mom
     df_dash['IsPrinterEligible'] = pm_eligible
@@ -1109,7 +1149,15 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         act["Low"] = act["BodyBot"]
 
                         # Moving averages
-                        act["SMA3"] = act["Close"].rolling(3).mean()
+                        act["SMA3_RAW"] = act["Close"].rolling(3).mean()
+                        if trickle_flag and len(act) >= 1:
+                            close_adj = act["Close"].copy()
+                            close_adj.iloc[0] = np.nan  # exclude Month 1
+                            # rolling mean ignores NaNs; min_periods=2 prevents Month2 from just echoing M2
+                            act["SMA3"] = close_adj.rolling(3, min_periods=2).mean()
+                        else:
+                            act["SMA3"] = act["SMA3_RAW"]
+                        
                         act["SMA6"] = act["Close"].rolling(6).mean()
 
                         # Headline stats
@@ -1118,19 +1166,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         
                         # If prior month is "trickle-ish", don’t print a nonsense MoM %
                         # Condition: deal was trickle-flagged AND we’re still early enough that MoM compares against Month1
-                        mom_text_override = None
-                        if trickle_flag and len(act) == 2:
-                            # Only two months exist: MoM would be M2 vs trickle-M1 -> meaningless
-                            mom_text_override = "TRICKLE"
-                        else:
-                            # Also protect against tiny denominators in general
-                            if prev_close <= 50:
-                                mom_text_override = "TRICKLE"
-                        
-                        if mom_text_override is not None:
+                        mom_is_trickle = (trickle_flag and len(act) == 2)
+                        if mom_is_trickle:
                             mom_pct = None
                         else:
-                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else 0.0
+                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
                             
                         sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
 
@@ -1138,17 +1178,33 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         m1.metric("LAST MONTH", f"${last_close:,.0f}")
                         
                         if mom_pct is None:
-                            m2.metric("MoM %", "TRICKLE")
+                            m2.metric("MoM %", "N/A (TRICKLE MONTH DETECTED)" if mom_is_trickle else "N/A")
                         else:
                             m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
                             
                         m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
                         
-                        if trickle_flag and trickle_reason:
-                            st.caption(f"TRICKLE DETECTED: {trickle_reason}")
+                        if trickle_flag:
+                            safe_reason = sanitize_terminal_text(trickle_reason)
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    margin-top: 6px;
+                                    color: #33ff00;
+                                    font-family: 'Courier New', monospace;
+                                    font-size: 12px;
+                                    white-space: nowrap;
+                                    word-break: normal;
+                                    overflow-x: auto;
+                                ">
+                                    TRICKLE DETECTED: {safe_reason if safe_reason else "TRUE"}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
 
                         # CRITICAL FIX 2: Create a clean subset DF for Altair to prevent serialization errors
-                        chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA6"]].copy()
+                        chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA3_RAW", "SMA6"]].copy()
                         # Ensure strictly datetime and reset index
                         chart_data['Period End Date'] = pd.to_datetime(chart_data['Period End Date'])
                         chart_data = chart_data.reset_index(drop=True)
