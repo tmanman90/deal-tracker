@@ -999,11 +999,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         rows = rows.tail(12)
                         
                         # Add to list
-                        for _, r in rows.iterrows():
+                        for i, (idx, r) in enumerate(rows.iterrows()):
                             final_ts_data.append({
                                 'Artist': artist_name,
                                 'did_norm': did,
                                 'DateStr': r['Period End Date'].strftime('%b %y'),
+                                'MonthIndex': i + 1, # Explicit int for sorting
                                 'Net Receipts': r['Net Receipts'],
                                 'SMA3_series': r['SMA3_series'] if pd.notna(r['SMA3_series']) else 0
                             })
@@ -1015,7 +1016,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     
                     # Base Chart
                     base = alt.Chart(ts_df).encode(
-                        x=alt.X('DateStr', sort=None, title=None, axis=None) # Hide X axis labels for sparkline feel
+                        # Use MonthIndex for X to ensure proper sort, hide axis
+                        x=alt.X('MonthIndex', title=None, axis=None) 
                     )
                     
                     # Neon Green Line (Actuals)
@@ -1024,7 +1026,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         strokeWidth=2,
                         interpolate='linear'
                     ).encode(
-                        y=alt.Y('Net Receipts', title=None, axis=None) # Hide Y axis too
+                        y=alt.Y('Net Receipts', title=None, axis=None, scale=alt.Scale(zero=False)) # Independent scales
                     )
                     
                     # Amber Dashed Line (SMA3)
@@ -1044,7 +1046,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     )
                     
                     # Combine layers
-                    chart_layer = alt.layer(line_net, line_sma, points)
+                    chart_layer = alt.layer(line_net, line_sma, points).resolve_scale(y='independent')
                     
                     # Facet by Artist (Rows)
                     final_chart = chart_layer.facet(
@@ -1053,14 +1055,15 @@ def show_portfolio(df_dash, df_act, current_date_override):
                             labelFontSize=12, 
                             labelAlign='left',
                             labelFont='Courier New'
-                        ))
+                        )),
+                        columns=1 # Force single column layout
                     ).properties(
-                        width='container',
-                        height=40 # Small height for bloomberg row look
+                        width=300, # Fixed width for sparklines
+                        height=40 
                     ).configure_view(
                         strokeWidth=0
                     ).configure_facet(
-                        spacing=5
+                        spacing=10
                     )
                     
                     st.altair_chart(final_chart, use_container_width=True, theme=None)
