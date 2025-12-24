@@ -995,15 +995,7 @@ def show_detail(df_dash, df_act, deal_id):
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
     
-    # --- TAGS IN TITLE ---
-    # Check for Tags and create badge if present
-    tag_val = str(deal_row.get('Tags', '')).strip()
-    tag_html = ""
-    if tag_val:
-        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
-
-    # Render Title with Tag
-    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
+    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -1025,7 +1017,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -1038,26 +1030,29 @@ def show_detail(df_dash, df_act, deal_id):
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
     
     # CHANGE: Replace Remaining with Profit if Recouped
-    # Use custom CSS styling for specific Gold color. Using 'st.markdown' as metric delta color is limited.
+    # Use standard st.metric with custom CSS injection for color override
     if is_recouped:
         profit = cum_val - adv_val
-        st.markdown(f"""
+        
+        # Inject CSS to target the specific metric container (2nd row, 2nd column)
+        # Using nth-of-type selector for reliability in targeting
+        st.markdown("""
         <style>
-        .gold-metric {{
-            background-color: #0d1117;
-            border: 1px solid #ffd700;
-            padding: 10px;
-            box-shadow: 2px 2px 0px #ffd700;
-            text-align: center;
-        }}
-        .gold-label {{ color: #ffbf00 !important; font-size: 0.8rem; font-weight: normal; }}
-        .gold-value {{ color: #ffd700 !important; font-size: 1.6rem; font-weight: bold; }}
+        /* Target the metric value in the 2nd metric of the 2nd row of columns */
+        div[data-testid="stMetric"]:nth-of-type(1) div[data-testid="stMetricValue"] {
+             /* This targets the first metric in the container it's in. 
+                Since we are inside a column, it's the only metric in that column div.
+                We need a way to target THIS specific column. 
+                Streamlit CSS injection is global.
+                Best approach: Wrap in container and use a unique class or just accept green.
+                Request said: "it can go back to being green." so standard metric is fine.
+             */
+             color: #33ff00 !important;
+        }
         </style>
-        <div class="gold-metric">
-            <div class="gold-label">GENERATED PROFIT</div>
-            <div class="gold-value">${profit:,.0f}</div>
-        </div>
         """, unsafe_allow_html=True)
+        
+        row2_c2.metric("GENERATED PROFIT", f"${profit:,.0f}")
     else:
         row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
         
@@ -1124,10 +1119,23 @@ def show_detail(df_dash, df_act, deal_id):
             
             # CLEANED UP DIAGNOSTIC BOX
             if is_recouped:
-                 # Recouped View: Simplified
+                 # Calculate Suggested Re-Up
+                 # Need last rolling avg. Can get from deal_act or pass it in.
+                 # Re-calculate quickly here for display simplicity
+                 re_up_str = "N/A"
+                 if not deal_act.empty and 'Net Receipts' in deal_act.columns:
+                     # Sort by date to ensure last 3 are correct
+                     if 'Period End Date' in deal_act.columns:
+                        da_sorted = deal_act.sort_values('Period End Date')
+                        last_3_avg = da_sorted.tail(3)['Net Receipts'].mean()
+                        re_up_val = last_3_avg * 12
+                        re_up_str = f"${re_up_val:,.0f}"
+                 
+                 # Recouped View: Simplified + Re-Up
                  diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span>{artist_type_line}{legacy_flag}
+<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color:#ffbf00;">{re_up_str}</span>{artist_type_line}{legacy_flag}
 </div>"""
             else:
                  # Active View: Full Stats
@@ -1233,12 +1241,9 @@ def show_detail(df_dash, df_act, deal_id):
             if is_recouped:
                 elapsed = deal_row.get('Elapsed Months', 0)
                 
-                # Suggested Re-Up Logic
-                re_up_amt = last_rolling * 12
-                
                 st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
                 
-                st.info(f"**SUGGESTED RE-UP ADVANCE:** ${re_up_amt:,.0f} (Based on current velocity ${last_rolling:,.0f}/mo for 12 months)")
+                # Removed duplicate Re-Up display here as requested
                 
             elif last_rolling > 0:
                 months_to_go = remaining / last_rolling
