@@ -682,8 +682,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
     elif sort_opt == "% to BE":
         sort_col = "% to BE Clean"
     elif sort_opt == "Grade":
-        sort_col = "Grade"
-        ascending = True # A is 'smaller' than B in ascii
+        # Custom Grade Sort
+        grade_order = {"A+": 1, "A": 2, "B+": 3, "B": 4, "C": 5, "D": 6, "F": 7, "WAITING": 8, "PENDING": 9, "N/A": 10}
+        filtered['Grade_Rank'] = filtered['Grade'].map(grade_order).fillna(99)
+        sort_col = "Grade_Rank"
+        ascending = True
     elif sort_opt == "Cum Receipts":
         sort_col = "Cum Receipts"
     elif sort_opt == "Delta Months":
@@ -972,7 +975,7 @@ def show_detail(df_dash, df_act, deal_id):
         
         chart_val = min(1.0, max(0.0, actual_recoup))
         
-        if pace_ratio < 0.60:
+        if pace_ratio < 0.70:
             bar_color = 'red' 
         elif pace_ratio < 0.90:
             bar_color = 'orange' 
