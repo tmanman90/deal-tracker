@@ -1181,7 +1181,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         m1.metric("LAST MONTH", f"${last_close:,.0f}")
                         
                         if mom_pct is None:
-                            m2.metric("MoM %", "N/A (TRICKLE MONTH DETECTED)" if mom_is_trickle else "N/A")
+                            m2.metric("MoM %", "TRICKLE" if mom_is_trickle else "N/A")
                         else:
                             m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
                             
