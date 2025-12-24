@@ -466,6 +466,12 @@ def process_data(df_dash, df_act, df_deals):
     if 'Deal ID' in df_dash.columns:
         df_dash['Deal ID'] = df_dash['Deal ID'].astype(str).str.strip()
 
+    # ADD NORMALIZED IDs (FIX for Market Pulse)
+    if 'Deal ID' in df_act.columns:
+        df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+    if 'Deal ID' in df_dash.columns:
+        df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+
     # Process Actuals Dates & Values
     if 'Net Receipts' in df_act.columns:
         df_act['Net Receipts'] = df_act['Net Receipts'].apply(clean_currency)
@@ -508,7 +514,8 @@ def process_data(df_dash, df_act, df_deals):
          if not valid_dates_all.empty:
              current_date_override = valid_dates_all['Period End Date'].max()
              
-    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal) & PRINTER METRICS
+    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
+    # AND COMPUTE PRINTER METRICS
     velocity_map = {}
     
     # Compute Printer metrics
@@ -953,28 +960,32 @@ def show_portfolio(df_dash, df_act, current_date_override):
     # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
     st.markdown("### > MARKET PULSE // PRINTERS NOW")
     
-    # 1. Filter Eligible Deals
-    printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
-    
-    if not printers_df.empty:
-        # 2. Sort by SMA3 desc, then Score
-        printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
-        top_printers = printers_df.head(12) # Top 12 only
+    if df_act.empty:
+        st.info("No ACTUALS data loaded.")
+    elif 'did_norm' not in df_act.columns:
+        st.error("ACTUALS is missing did_norm (normalization failed).")
+    else:
+        # 1. Filter Eligible Deals
+        printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
         
-        count_printers = len(printers_df)
-        
-        # Header Stats for Pulse
-        st.markdown(f"""
-        <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
-            <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
-            <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # 3. Build Time Series Data for these Top Deals
-        if not df_act.empty and 'did_norm' in df_act.columns:
+        if not printers_df.empty:
+            # 2. Sort by SMA3 desc, then Score
+            printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
+            top_printers = printers_df.head(12) # Top 12 only
+            
+            count_printers = len(printers_df)
+            
+            # Header Stats for Pulse
+            st.markdown(f"""
+            <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
+                <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
+                <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 3. Build Time Series Data for these Top Deals
             target_dids = top_printers['did_norm'].unique()
-            # Filter actuals
+            # Filter actuals using normalized IDs
             act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
             
             if not act_subset.empty and 'Period End Date' in act_subset.columns:
@@ -1072,8 +1083,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     st.info("No timeline data available for top printer deals.")
             else:
                 st.info("No actuals data found for eligible deals.")
-    else:
-        st.info("No deals meet the $500 SMA(3) threshold yet.")
+        else:
+            st.info("No deals meet the $500 SMA(3) threshold yet.")
         
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
