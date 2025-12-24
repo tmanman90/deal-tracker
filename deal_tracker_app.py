@@ -508,8 +508,7 @@ def process_data(df_dash, df_act, df_deals):
          if not valid_dates_all.empty:
              current_date_override = valid_dates_all['Period End Date'].max()
              
-    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
-    # AND COMPUTE PRINTER METRICS
+    # Calculate Recent Velocity Map (Last 3 Months Avg per Deal) & PRINTER METRICS
     velocity_map = {}
     
     # Compute Printer metrics
@@ -736,133 +735,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
     
     st.markdown("---")
     
-    # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
-    st.markdown("### > MARKET PULSE // PRINTERS NOW")
-    
-    # 1. Filter Eligible Deals
-    printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
-    
-    if not printers_df.empty:
-        # 2. Sort by SMA3 desc, then Score
-        printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
-        top_printers = printers_df.head(12) # Top 12 only
-        
-        count_printers = len(printers_df)
-        
-        # Header Stats for Pulse
-        st.markdown(f"""
-        <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
-            <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
-            <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # 3. Build Time Series Data for these Top Deals
-        if not df_act.empty and 'did_norm' in df_act.columns:
-            target_dids = top_printers['did_norm'].unique()
-            # Filter actuals
-            act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
-            
-            if not act_subset.empty and 'Period End Date' in act_subset.columns:
-                # Ensure date sort
-                act_subset = act_subset.sort_values('Period End Date')
-                
-                final_ts_data = []
-                
-                for did in target_dids:
-                    # Get Deal Info
-                    deal_info = top_printers[top_printers['did_norm'] == did].iloc[0]
-                    artist_name = deal_info.get('Artist / Project', deal_info.get('Artist', 'Unknown'))
-                    
-                    # Get Rows
-                    rows = act_subset[act_subset['did_norm'] == did].copy()
-                    
-                    if not rows.empty:
-                        # Compute rolling SMA3 for the line overlay
-                        rows['SMA3_series'] = rows['Net Receipts'].rolling(window=3).mean()
-                        
-                        # Take last 12 months max
-                        rows = rows.tail(12)
-                        
-                        # Add to list
-                        for i, (idx, r) in enumerate(rows.iterrows()):
-                            final_ts_data.append({
-                                'Artist': artist_name,
-                                'did_norm': did,
-                                'DateStr': r['Period End Date'].strftime('%b %y'),
-                                'MonthIndex': i + 1, # Explicit int for sorting
-                                'Net Receipts': r['Net Receipts'],
-                                'SMA3_series': r['SMA3_series'] if pd.notna(r['SMA3_series']) else 0
-                            })
-                            
-                if final_ts_data:
-                    ts_df = pd.DataFrame(final_ts_data)
-                    
-                    # 4. Create Bloomberg-style Sparklines (Small Multiples)
-                    
-                    # Base Chart
-                    base = alt.Chart(ts_df).encode(
-                        # Use MonthIndex for X to ensure proper sort, hide axis
-                        x=alt.X('MonthIndex', title=None, axis=None) 
-                    )
-                    
-                    # Neon Green Line (Actuals)
-                    line_net = base.mark_line(
-                        color='#39FF14', 
-                        strokeWidth=2,
-                        interpolate='linear'
-                    ).encode(
-                        y=alt.Y('Net Receipts', title=None, axis=None, scale=alt.Scale(zero=False)) # Independent scales
-                    )
-                    
-                    # Amber Dashed Line (SMA3)
-                    line_sma = base.mark_line(
-                        color='#ffbf00',
-                        strokeWidth=1,
-                        strokeDash=[2, 2],
-                        interpolate='linear'
-                    ).encode(
-                        y=alt.Y('SMA3_series', title=None, axis=None)
-                    )
-                    
-                    # Tooltip layer (transparent points)
-                    points = base.mark_point(opacity=0).encode(
-                        y='Net Receipts',
-                        tooltip=['Artist', 'DateStr', 'Net Receipts', 'SMA3_series']
-                    )
-                    
-                    # Combine layers
-                    chart_layer = alt.layer(line_net, line_sma, points).resolve_scale(y='independent')
-                    
-                    # Facet by Artist (Rows)
-                    final_chart = chart_layer.facet(
-                        row=alt.Row('Artist', title=None, header=alt.Header(
-                            labelColor='#e6ffff', 
-                            labelFontSize=12, 
-                            labelAlign='left',
-                            labelFont='Courier New'
-                        )),
-                        columns=1 # Force single column layout
-                    ).properties(
-                        width=300, # Fixed width for sparklines
-                        height=40 
-                    ).configure_view(
-                        strokeWidth=0
-                    ).configure_facet(
-                        spacing=10
-                    )
-                    
-                    st.altair_chart(final_chart, use_container_width=True, theme=None)
-                    
-                else:
-                    st.info("No timeline data available for top printer deals.")
-            else:
-                st.info("No actuals data found for eligible deals.")
-    else:
-        st.info("No deals meet the $500 SMA(3) threshold yet.")
-        
-    st.markdown("---")
-    
     # --- FILTERS ---
     col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
     
@@ -1076,6 +948,133 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 
         st.markdown("<div style='border-bottom: 1px solid #333; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
 
+    st.markdown("---")
+
+    # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
+    st.markdown("### > MARKET PULSE // PRINTERS NOW")
+    
+    # 1. Filter Eligible Deals
+    printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
+    
+    if not printers_df.empty:
+        # 2. Sort by SMA3 desc, then Score
+        printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
+        top_printers = printers_df.head(12) # Top 12 only
+        
+        count_printers = len(printers_df)
+        
+        # Header Stats for Pulse
+        st.markdown(f"""
+        <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
+            <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
+            <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 3. Build Time Series Data for these Top Deals
+        if not df_act.empty and 'did_norm' in df_act.columns:
+            target_dids = top_printers['did_norm'].unique()
+            # Filter actuals
+            act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
+            
+            if not act_subset.empty and 'Period End Date' in act_subset.columns:
+                # Ensure date sort
+                act_subset = act_subset.sort_values('Period End Date')
+                
+                final_ts_data = []
+                
+                for did in target_dids:
+                    # Get Deal Info
+                    deal_info = top_printers[top_printers['did_norm'] == did].iloc[0]
+                    artist_name = deal_info.get('Artist / Project', deal_info.get('Artist', 'Unknown'))
+                    
+                    # Get Rows
+                    rows = act_subset[act_subset['did_norm'] == did].copy()
+                    
+                    if not rows.empty:
+                        # Compute rolling SMA3 for the line overlay
+                        rows['SMA3_series'] = rows['Net Receipts'].rolling(window=3).mean()
+                        
+                        # Take last 12 months max
+                        rows = rows.tail(12)
+                        
+                        # Add to list
+                        for i, (idx, r) in enumerate(rows.iterrows()):
+                            final_ts_data.append({
+                                'Artist': artist_name,
+                                'did_norm': did,
+                                'DateStr': r['Period End Date'].strftime('%b %y'),
+                                'MonthIndex': i + 1, # Explicit int for sorting
+                                'Net Receipts': r['Net Receipts'],
+                                'SMA3_series': r['SMA3_series'] if pd.notna(r['SMA3_series']) else 0
+                            })
+                            
+                if final_ts_data:
+                    ts_df = pd.DataFrame(final_ts_data)
+                    
+                    # 4. Create Bloomberg-style Sparklines (Small Multiples)
+                    
+                    # Base Chart
+                    base = alt.Chart(ts_df).encode(
+                        # Use MonthIndex for X to ensure proper sort, hide axis
+                        x=alt.X('MonthIndex', title=None, axis=None) 
+                    )
+                    
+                    # Neon Green Line (Actuals)
+                    line_net = base.mark_line(
+                        color='#39FF14', 
+                        strokeWidth=2,
+                        interpolate='linear'
+                    ).encode(
+                        y=alt.Y('Net Receipts', title=None, axis=None, scale=alt.Scale(zero=False)) # Independent scales
+                    )
+                    
+                    # Amber Dashed Line (SMA3)
+                    line_sma = base.mark_line(
+                        color='#ffbf00',
+                        strokeWidth=1,
+                        strokeDash=[2, 2],
+                        interpolate='linear'
+                    ).encode(
+                        y=alt.Y('SMA3_series', title=None, axis=None)
+                    )
+                    
+                    # Tooltip layer (transparent points)
+                    points = base.mark_point(opacity=0).encode(
+                        y='Net Receipts',
+                        tooltip=['Artist', 'DateStr', 'Net Receipts', 'SMA3_series']
+                    )
+                    
+                    # Combine layers
+                    chart_layer = alt.layer(line_net, line_sma, points).resolve_scale(y='independent')
+                    
+                    # Facet by Artist (Rows)
+                    final_chart = chart_layer.facet(
+                        row=alt.Row('Artist', title=None, header=alt.Header(
+                            labelColor='#e6ffff', 
+                            labelFontSize=12, 
+                            labelAlign='left',
+                            labelFont='Courier New'
+                        )),
+                        columns=1 # Force single column layout
+                    ).properties(
+                        width=300, # Fixed width for sparklines
+                        height=40 
+                    ).configure_view(
+                        strokeWidth=0
+                    ).configure_facet(
+                        spacing=10
+                    )
+                    
+                    st.altair_chart(final_chart, use_container_width=True, theme=None)
+                    
+                else:
+                    st.info("No timeline data available for top printer deals.")
+            else:
+                st.info("No actuals data found for eligible deals.")
+    else:
+        st.info("No deals meet the $500 SMA(3) threshold yet.")
+        
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
