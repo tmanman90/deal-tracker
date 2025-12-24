@@ -133,7 +133,7 @@ st.markdown("""
         display: inline-block;
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
-        animation: ticker 25s linear infinite; 
+        animation: ticker 120s linear infinite; 
         will-change: transform;
         transform: translate3d(0, 0, 0);
         backface-visibility: hidden;
@@ -645,7 +645,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
     filtered = df_dash.copy()
     
     # Normalize Deal ID for debugging/robustness in filtering
-    # This addresses Requirement #1: normalize the ID
     if 'Deal ID' in filtered.columns:
         filtered['did_norm'] = filtered['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
     else:
@@ -657,11 +656,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
         (filtered['did_norm'] != "") & 
         (filtered['did_norm'].str.lower() != "nan")
     ]
-    
-    # Requirement #4: Optional Debug Warning for Duplicates (can be commented out if noisy)
-    # dups = filtered[filtered['did_norm'].duplicated()]
-    # if not dups.empty:
-    #     st.warning(f"DEBUG: Found duplicate Normalized Deal IDs: {dups['did_norm'].tolist()}")
 
     if search:
         mask = pd.Series([False] * len(filtered))
@@ -771,12 +765,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
     </div>
     """, unsafe_allow_html=True)
     
-    # Iterate with index to create unique keys (Requirement #3)
-    # Using itertuples for slight perf gain if needed, but iterrows works fine here
     for i, row in enumerate(filtered.to_dict('records')):
         # Clean Data for Display
-        # Using dict access since we converted to dict records for safe iteration
-        # This avoids index issues if indices are non-unique
         artist = row.get('Artist / Project', row.get('Artist', 'Unknown'))
         
         # Check for Tags and append badge if ANY text is present
@@ -784,11 +774,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
         if tags:
             artist += f' <span style="font-size: 0.7em; border: 1px solid #33ff00; padding: 2px 6px; margin-left: 8px; border-radius: 4px; color: #33ff00;">{tags}</span>'
             
-        # Use normalized Deal ID for button logic
         did = row.get('did_norm', 'N/A')
-        # Fallback display ID
         did_disp = row.get('Deal ID', 'N/A')
-        
         status = row.get('Status', '-')
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
@@ -824,7 +811,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
         with c6:
             st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #ffbf00;'>{rem_str}</div>", unsafe_allow_html=True)
         with c7:
-            # Use unique key combining did and loop index 'i' to prevent duplicate key errors
             if st.button("OPEN", key=f"btn_open_{did}_{i}"):
                 st.session_state['selected_deal_id'] = did
                 st.rerun()
@@ -838,13 +824,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
     
     if not df_act.empty and not df_dash.empty:
         pulse_data = []
-        # Use normalized IDs for matching
         if 'Deal ID' in df_dash.columns:
             df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
         
         active_ids = df_dash['did_norm'].unique()
         
-        # Ensure df_act has normalized ID
         if 'Deal ID' in df_act.columns:
             df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
         
@@ -857,7 +841,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     deal_subset = deal_subset.dropna(subset=['Period End Date']).sort_values('Period End Date')
                     
                     # Need Target Amount to calculate % Recouped
-                    # UPDATED: Use Executed Advance here too for consistency with Pulse Chart
                     adv_row = df_dash[df_dash['did_norm'] == did]
                     if not adv_row.empty:
                         target_amt = adv_row.iloc[0].get('Target Amount', 0)
@@ -980,7 +963,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -1053,16 +1036,14 @@ def show_detail(df_dash, df_act, deal_id):
             if tag_val:
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
-            st.markdown(f"""
-            <div class="diagnostic-box">
-                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
-                {artist_type_line}
-                {legacy_flag}
-            </div>
-            """, unsafe_allow_html=True)
+            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
+            diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
+</div>"""
+            st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
@@ -1172,20 +1153,6 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-        
-    st.markdown("---")
-    
-    # Custom HTML for Debug Table
-    st.markdown(f"""
-    <div class="debug-container">
-        <span class="debug-title">🕵️ DEAL DETECTIVE (DEBUG)</span>
-        <div class="debug-row"><span class="debug-key">Forecast Start Date (Smart):</span> <span class="debug-val">{deal_row.get('Forecast Start Date')}</span></div>
-        <div class="debug-row"><span class="debug-key">Elapsed Months (Raw):</span> <span class="debug-val">{deal_row.get('Elapsed Months')}</span></div>
-        <div class="debug-row"><span class="debug-key">Effective Months (Mulligan):</span> <span class="debug-val">{max(0, deal_row.get('Elapsed Months',0) - 0.5)}</span></div>
-        <div class="debug-row"><span class="debug-key">Pace Ratio:</span> <span class="debug-val">{deal_row.get('Pace Ratio')}</span></div>
-        <div class="debug-row"><span class="debug-key">Target Amount:</span> <span class="debug-val">{deal_row.get('Target Amount')}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
