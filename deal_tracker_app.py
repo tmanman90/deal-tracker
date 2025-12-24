@@ -1264,40 +1264,40 @@ def show_portfolio(df_dash, df_act, current_date_override):
                             .configure_axis(grid=False)
                         )
 
-                        # Headline stats
-                        last_close = float(act["Close"].iloc[-1])
-                        prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
+                        st.altair_chart(chart, use_container_width=True, theme=None)
+            
+            except Exception as e:
+                st.error(f"Error rendering Market Pulse chart: {str(e)}")
 
-                        # --- MoM TRICKLE GUARDRAIL (restored) ---
-                        TRICKLE_FLOOR = 50.0
-
-                        # Treat MoM as TRICKLE if the prior month is effectively a trickle denominator
-                        # (this fixes China: prev_close = 0.04)
-                        mom_is_trickle = (len(act) >= 2 and prev_close <= TRICKLE_FLOOR)
-
-                        if mom_is_trickle:
-                            mom_pct = None
-                        else:
-                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
-                            
-                        sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
-
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("LAST MONTH", f"${last_close:,.0f}")
-                        
-                        if mom_pct is None:
-                            m2.metric("MoM %", "N/A (TRICKLE MONTH DETECTED)" if mom_is_trickle else "N/A")
-                        else:
-                            m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
-                            
-                        m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
-                        
-                        if trickle_flag:
-                            safe_reason = sanitize_terminal_text(trickle_reason)
-                            st.markdown(
-                                f"""
-                                <div style="
-                                    margin-top: 6px;
+    # --- MARKET PULSE // PRINTERS NOW (Updated Bloomberg-style) ---
+    st.markdown("### > MARKET PULSE // PRINTERS NOW")
+    
+    if df_act.empty:
+        st.info("No ACTUALS data loaded.")
+    elif 'did_norm' not in df_act.columns:
+        st.error("ACTUALS is missing did_norm (normalization failed).")
+    else:
+        # 1. Filter Eligible Deals
+        printers_df = df_dash[df_dash['IsPrinterEligible'] == True].copy()
+        
+        if not printers_df.empty:
+            # 2. Sort by SMA3 desc, then Score
+            printers_df = printers_df.sort_values(by=['SMA3', 'PrinterScore'], ascending=[False, False])
+            top_printers = printers_df.head(12) # Top 12 only
+            
+            count_printers = len(printers_df)
+            
+            # Header Stats for Pulse
+            st.markdown(f"""
+            <div style="margin-bottom: 15px; font-size: 0.9rem; color: #888;">
+                <span style="color: #ffbf00; font-weight: bold;">PRINTER THRESHOLD:</span> $500 SMA(3) &nbsp;&nbsp;|&nbsp;&nbsp; 
+                <span style="color: #ffbf00; font-weight: bold;">COUNT:</span> {count_printers} ELIGIBLE
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 3. Build Time Series Data for these Top Deals
+            target_dids = top_printers['did_norm'].unique()
+            # Filter actuals using normalized IDs
             act_subset = df_act[df_act['did_norm'].isin(target_dids)].copy()
             
             if not act_subset.empty and 'Period End Date' in act_subset.columns:
