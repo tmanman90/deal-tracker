@@ -127,11 +127,13 @@ st.markdown("""
         border-bottom: 1px solid #33ff00;
         padding: 5px 0;
         margin-bottom: 20px;
+        white-space: nowrap; 
     }
     .ticker {
         display: inline-block;
         white-space: nowrap;
-        animation: ticker 30s linear infinite;
+        /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
+        animation: ticker 45s linear infinite; 
     }
     .ticker-item {
         display: inline-block;
@@ -140,8 +142,8 @@ st.markdown("""
         color: #33ff00;
     }
     @keyframes ticker {
-        0% { transform: translateX(100%); }
-        100% { transform: translateX(-100%); }
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
     }
 
     /* CUSTOM DEAL ROW STYLE */
