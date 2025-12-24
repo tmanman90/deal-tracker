@@ -1487,15 +1487,7 @@ def show_detail(df_dash, df_act, deal_id):
         # Using nth-of-type selector for reliability in targeting
         st.markdown("""
         <style>
-        /* Target the metric value in the 2nd metric of the 2nd row of columns */
         div[data-testid="stMetric"]:nth-of-type(1) div[data-testid="stMetricValue"] {
-             /* This targets the first metric in the container it's in. 
-                Since we are inside a column, it's the only metric in that column div.
-                We need a way to target THIS specific column. 
-                Streamlit CSS injection is global.
-                Best approach: Wrap in container and use a unique class or just accept green.
-                Request said: "it can go back to being green." so standard metric is fine.
-             */
              color: #33ff00 !important;
         }
         </style>
