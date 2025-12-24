@@ -1164,9 +1164,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         last_close = float(act["Close"].iloc[-1])
                         prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
                         
-                        # If prior month is "trickle-ish", don’t print a nonsense MoM %
-                        # Condition: deal was trickle-flagged AND we’re still early enough that MoM compares against Month1
-                        mom_is_trickle = (trickle_flag and len(act) == 2)
+                        # --- MoM TRICKLE GUARDRAIL (restored) ---
+                        TRICKLE_FLOOR = 50.0
+                        # Treat MoM as TRICKLE when the prior month denominator is tiny
+                        # (fixes cases like China where prev month is $0.04)
+                        mom_is_trickle = (len(act) >= 2 and prev_close <= TRICKLE_FLOOR)
+                        
                         if mom_is_trickle:
                             mom_pct = None
                         else:
