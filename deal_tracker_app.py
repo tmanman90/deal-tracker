@@ -717,13 +717,13 @@ def show_portfolio(df_dash, df_act, current_date_override):
             if total_eligible_adv > 0:
                 overall_ratio = total_score / total_eligible_adv
                 
-                if overall_ratio >= 2.00: w_grade = "A++"
-                elif overall_ratio >= 1.15: w_grade = "A+"
+                if overall_ratio >= 1.15: w_grade = "A+"
                 elif overall_ratio >= 1.00: w_grade = "A"
                 elif overall_ratio >= 0.90: w_grade = "B+"
-                elif overall_ratio >= 0.75: w_grade = "B"
+                elif overall_ratio >= 0.80: w_grade = "B"
+                elif overall_ratio >= 0.70: w_grade = "C+"
                 elif overall_ratio >= 0.60: w_grade = "C"
-                elif overall_ratio >= 0.40: w_grade = "D"
+                elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
                 
                 kpi5.metric("WEIGHTED GRADE", w_grade)
@@ -919,7 +919,15 @@ def show_detail(df_dash, df_act, deal_id):
                   deal_row.get('Artist', 
                   deal_row.get('Project', 'UNKNOWN ARTIST')))
     
-    st.title(f"// ANALYZING: {artist_name} [{deal_id}]")
+    # --- TAGS IN TITLE ---
+    # Check for Tags and create badge if present
+    tag_val = str(deal_row.get('Tags', '')).strip()
+    tag_html = ""
+    if tag_val:
+        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
+
+    # Render Title with Tag
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -994,7 +1002,6 @@ def show_detail(df_dash, df_act, deal_id):
             recoup_pct = deal_row.get('% to BE Clean', 0) * 100
             expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
             is_legacy = deal_row.get('Is Legacy', False)
-            tag_val = str(deal_row.get('Tags', '')).upper()
             
             if elapsed <= 4.5:
                  note = "(Curved for ramp-up)"
@@ -1003,21 +1010,14 @@ def show_detail(df_dash, df_act, deal_id):
             
             legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
             
-            # Artist Type Line
-            artist_type_line = ""
-            if tag_val:
-                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
-            
-            st.markdown(f"""
-            <div class="diagnostic-box">
-                <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-                <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-                <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>
-                {artist_type_line}
-                {legacy_flag}
-            </div>
-            """, unsafe_allow_html=True)
+            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
+            diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{legacy_flag}
+</div>"""
+            st.markdown(diag_html, unsafe_allow_html=True)
         else:
             count_found = deal_row.get('Data Points Found', 0)
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
