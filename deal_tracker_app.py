@@ -560,7 +560,6 @@ def process_data(df_dash, df_act, df_deals):
     data_points_list = []
     expected_list = []
     legacy_list = []
-    recent_velocity_list = [] # Store velocity
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -582,7 +581,6 @@ def process_data(df_dash, df_act, df_deals):
         data_points_list.append(count)
         expected_list.append(exp_prog)
         legacy_list.append(is_leg)
-        recent_velocity_list.append(recent_vel)
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
@@ -591,7 +589,6 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Data Points Found'] = data_points_list 
     df_dash['Expected Recoupment'] = expected_list
     df_dash['Is Legacy'] = legacy_list
-    df_dash['Recent Velocity'] = recent_velocity_list
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -621,64 +618,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
         for _, row in sorted_deals.iterrows():
             artist_name = row.get('Artist / Project', row.get('Artist', row.get('Project', 'Unknown')))
             
-            # --- MOMENTUM LOGIC (Ticker) ---
-            # Calculate metrics for arrow direction
-            # Cumulative Ratio: Total Receipts / (Effective Months used in Grade, but simplified here)
-            # Actually, calculate_pace_metrics returns the finalized 'Pace Ratio'.
-            # We want to compare Cumulative Pace vs Velocity Pace specifically.
-            
-            # Re-derive Cumulative & Velocity Ratios for comparison
-            target_amt = row.get('Target Amount', 1)
-            elapsed_mo = row.get('Elapsed Months', 1)
-            # Effective months logic from calc function: max(0, elapsed - 0.5)
-            effective_mo = max(0.0, elapsed_mo - 0.5)
-            
-            # Cumulative Pace (Total)
-            cum_receipts = row.get('Cum Receipts', 0)
-            target_months = 12.0 # Standard assumption for ticker
-            
-            # Calculate Expected % based on effective time
-            if target_months > 0:
-                expected_prog = min(1.0, effective_mo / target_months)
-            else:
-                expected_prog = 0
-            
-            actual_prog = cum_receipts / target_amt if target_amt > 0 else 0
-            
-            if expected_prog > 0:
-                cumulative_ratio = actual_prog / expected_prog
-            else:
-                cumulative_ratio = 0
-                
-            # Velocity Pace (Recent)
-            recent_vel = row.get('Recent Velocity', 0)
-            velocity_ratio = 0.0
-            data_count = row.get('Data Points Found', 0)
-            
-            if data_count >= 3 and target_amt > 0:
-                projected_annual = recent_vel * 12.0
-                velocity_ratio = projected_annual / target_amt
-            else:
-                # Fallback if not enough data for velocity
-                velocity_ratio = cumulative_ratio
-
-            # Determine Direction & Color
-            if velocity_ratio > cumulative_ratio * 1.05:
-                symbol = "↑" # Heating Up
-                color_hex = "#33ff00" # Green
-            elif velocity_ratio < cumulative_ratio * 0.95:
-                symbol = "↓" # Cooling Off
-                color_hex = "#ff3333" # Red
-            else:
-                symbol = "→" # Steady
-                color_hex = "#ffbf00" # Amber
-
-            # Safe access to clean percentage
+            symbol = "▲" if row.get('Pace Ratio', 0) >= 1.0 else "▼"
             pct = row.get('% to BE Clean', 0)
             if pd.isna(pct): pct = 0.0
             
-            # Ticker Item HTML
-            item = f"<span style='color:{color_hex}'>{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%</span>"
+            item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
             ticker_items.append(item)
     
     ticker_html = f"""
@@ -833,7 +777,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         
-        # Updated grade color logic
+        # Updated grade color logic (Stricter)
         if grade in ["A+", "A", "B+"]:
             grade_color = "#33ff00" # Green
         elif grade == "B":
