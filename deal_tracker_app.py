@@ -309,6 +309,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     
     # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
     
+    target_amount = 0.0
     target_months = 12.0 # Default
     is_legacy = False
     
@@ -317,10 +318,14 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     sel_adv_raw = row.get('Selected Advance', '')
     sel_adv = clean_currency(sel_adv_raw)
     
-    # Check if deal is analyzed (has strategy and selected advance)
+    # Explicit Logic:
+    # If we have a Strategy AND a valid Selected Advance > 0, it is an ANALYZER deal.
+    # Otherwise, it is a LEGACY deal.
+    
     if strat and sel_adv > 0:
         # ANALYZER MODE
         is_legacy = False
+        target_amount = sel_adv
         
         # Use Label Breakeven Months if available, else 12
         lbm = row.get('Label Breakeven Months', 12)
@@ -335,6 +340,8 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     else:
         # LEGACY MODE
         is_legacy = True
+        # Use Executed Advance as the target
+        target_amount = clean_currency(row.get('Executed Advance', 0))
         target_months = 12.0
 
     # 3. Parse Dates
@@ -1015,61 +1022,62 @@ def show_portfolio(df_dash, df_act, current_date_override):
                             
                 if final_ts_data:
                     ts_df = pd.DataFrame(final_ts_data)
-                    
-                    # 4. Create Bloomberg-style Sparklines (Small Multiples)
-                    
-                    # Base Chart
-                    base = alt.Chart(ts_df).encode(
-                        # Use MonthIndex for X to ensure proper sort, hide axis
-                        x=alt.X('MonthIndex', title=None, axis=None) 
-                    )
-                    
-                    # Neon Green Line (Actuals)
-                    line_net = base.mark_line(
-                        color='#39FF14', 
-                        strokeWidth=2,
-                        interpolate='linear'
-                    ).encode(
-                        y=alt.Y('Net Receipts', title=None, axis=None, scale=alt.Scale(zero=False)) # Independent scales
-                    )
-                    
-                    # Amber Dashed Line (SMA3)
-                    line_sma = base.mark_line(
-                        color='#ffbf00',
-                        strokeWidth=1,
-                        strokeDash=[2, 2],
-                        interpolate='linear'
-                    ).encode(
-                        y=alt.Y('SMA3_series', title=None, axis=None)
-                    )
-                    
-                    # Tooltip layer (transparent points)
-                    points = base.mark_point(opacity=0).encode(
-                        y='Net Receipts',
-                        tooltip=['Artist', 'DateStr', 'Net Receipts', 'SMA3_series']
-                    )
-                    
-                    # Combine layers
-                    chart_layer = alt.layer(line_net, line_sma, points).resolve_scale(y='independent')
-                    
-                   # Facet by Artist (Rows)
-                    final_chart = chart_layer.facet(
-                        row=alt.Row('Artist:N', title=None, header=alt.Header(
-                            labelColor='#e6ffff', 
-                            labelFontSize=12, 
-                            labelAlign='left',
-                            labelFont='Courier New'
-                        ))
-                    ).properties(
-                        width=300, # Fixed width for sparklines
-                        height=40 
-                    ).configure_view(
-                        strokeWidth=0
-                    ).configure_facet(
-                        spacing=10
-                    )
-                    
-                    st.altair_chart(final_chart, use_container_width=True, theme=None)
+                    # Strong typing (prevents Vega-Lite from choking on mixed types)
+                    ts_df["MonthIndex"] = pd.to_numeric(ts_df["MonthIndex"], errors="coerce")
+                    ts_df["Net Receipts"] = pd.to_numeric(ts_df["Net Receipts"], errors="coerce").fillna(0)
+                    ts_df["SMA3_series"] = pd.to_numeric(ts_df["SMA3_series"], errors="coerce").fillna(0)
+                    ts_df = ts_df.dropna(subset=["MonthIndex"]).copy()
+                    ts_df["MonthIndex"] = ts_df["MonthIndex"].astype(int)
+
+                    for did in target_dids:
+                        deal_info = top_printers[top_printers["did_norm"] == did].iloc[0]
+                        artist_name = deal_info.get("Artist / Project", deal_info.get("Artist", "Unknown"))
+
+                        sub = ts_df[ts_df["did_norm"] == did].sort_values("MonthIndex")
+                        if sub.empty:
+                            continue
+
+                        st.markdown(
+                            f"<div style='color:#e6ffff; font-family:Courier New; font-size:12px; margin-bottom:2px;'>{artist_name}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        base = alt.Chart(sub).encode(
+                            x=alt.X("MonthIndex:Q", title=None, axis=None)
+                        )
+
+                        line_net = base.mark_line(
+                            color="#39FF14",
+                            strokeWidth=2
+                        ).encode(
+                            y=alt.Y("Net Receipts:Q", title=None, axis=None, scale=alt.Scale(zero=False))
+                        )
+
+                        line_sma = base.mark_line(
+                            color="#ffbf00",
+                            strokeWidth=1,
+                            strokeDash=[2, 2]
+                        ).encode(
+                            y=alt.Y("SMA3_series:Q", title=None, axis=None, scale=alt.Scale(zero=False))
+                        )
+
+                        points = base.mark_point(opacity=0).encode(
+                            y=alt.Y("Net Receipts:Q"),
+                            tooltip=[
+                                alt.Tooltip("Artist:N"),
+                                alt.Tooltip("DateStr:N"),
+                                alt.Tooltip("Net Receipts:Q", format=",.0f"),
+                                alt.Tooltip("SMA3_series:Q", format=",.0f"),
+                            ],
+                        )
+
+                        spark = (
+                            alt.layer(line_net, line_sma, points)
+                            .properties(width=300, height=40)
+                            .configure_view(strokeWidth=0)
+                        )
+
+                        st.altair_chart(spark, use_container_width=False, theme=None)
                     
                 else:
                     st.info("No timeline data available for top printer deals.")
