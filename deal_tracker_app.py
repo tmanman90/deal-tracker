@@ -43,10 +43,19 @@ st.markdown("""
         pointer-events: none;
     }
 
-    /* TYPOGRAPHY */
-    h1, h2, h3, h4, h5, h6, p, div, span, label, li, a {
+    /* TYPOGRAPHY (don’t break Streamlit’s icon spans) */
+    h1, h2, h3, h4, h5, h6, p, div, label, li, a,
+    span:not(.material-icons):not([class*="material-icons"]):not([class*="material-symbol"]) {
         font-family: 'Courier New', Courier, monospace !important;
         text-shadow: 0 0 2px #33ff00aa;
+    }
+
+    /* RESTORE STREAMLIT / BASEWEB ICON FONTS */
+    span.material-icons,
+    span[class*="material-icons"],
+    span[class*="material-symbol"] {
+        font-family: "Material Icons" !important;
+        text-shadow: none !important;
     }
     
     h1 { color: #33ff00; letter-spacing: 2px; text-transform: uppercase; border-bottom: 2px solid #33ff00; padding-bottom: 10px; }
@@ -1514,7 +1523,7 @@ def show_detail(df_dash, df_act, deal_id):
                 deal_act['Net Receipts'] = 0
             
             # --- MONTHLY RECEIPTS LIST (EXPANDER) ---
-            with st.expander("### > MONTHLY RECEIPTS (CLICK TO EXPAND)", expanded=False):
+            with st.expander("> MONTHLY RECEIPTS (CLICK TO EXPAND)", expanded=False):
                 # Header
                 h1, h2 = st.columns([1, 1])
                 h1.markdown("**PERIOD**")
