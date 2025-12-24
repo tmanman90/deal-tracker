@@ -134,6 +134,10 @@ st.markdown("""
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
         animation: ticker 25s linear infinite; 
+        will-change: transform;
+        transform: translate3d(0, 0, 0);
+        backface-visibility: hidden;
+        perspective: 1000px;
     }
     .ticker-item {
         display: inline-block;
@@ -606,6 +610,11 @@ def process_data(df_dash, df_act, df_deals):
 # -----------------------------------------------------------------------------
 def show_portfolio(df_dash, df_act, current_date_override):
     st.title(">>> GLOBAL DEAL TRACKER_")
+    
+    # --- DEBUG DISPLAY: REPORTING DATE ---
+    if current_date_override:
+        current_date_str = current_date_override.strftime('%Y-%m-%d')
+        # st.caption(f"REPORTING DATE: {current_date_str}")
     
     # --- TICKER TAPE ---
     ticker_items = []
