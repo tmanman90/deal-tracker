@@ -1304,9 +1304,47 @@ def show_detail(df_dash, df_act, deal_id):
         df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
         deal_act = df_act[df_act['did_norm'] == deal_id].copy()
     
-    if st.button("<< RETURN TO DASHBOARD"):
-        del st.session_state['selected_deal_id']
-        st.rerun()
+    # --- TOP BAR: RETURN & SWITCHER ---
+    top_c1, top_c2 = st.columns([1, 4]) 
+    
+    with top_c1:
+        if st.button("<< RETURN TO DASHBOARD"):
+            del st.session_state['selected_deal_id']
+            st.rerun()
+
+    with top_c2:
+        # Dropdown logic
+        # Filter usable rows
+        valid_opts = df_dash[df_dash['did_norm'].notna() & (df_dash['did_norm'] != "")].copy()
+        
+        # Sort for easy finding
+        valid_opts['sort_name'] = valid_opts.apply(lambda x: str(x.get('Artist / Project', x.get('Artist', ''))).lower(), axis=1)
+        valid_opts = valid_opts.sort_values('sort_name')
+        
+        # Build labels
+        def fmt_func(did):
+            row = valid_opts[valid_opts['did_norm'] == did]
+            if not row.empty:
+                r = row.iloc[0]
+                art = r.get('Artist / Project', r.get('Artist', 'Unknown'))
+                grd = r.get('Grade', 'PENDING') if r.get('Is Eligible', False) else 'PENDING'
+                return f"{art} ({grd})"
+            return did
+            
+        # Get options list
+        opts = valid_opts['did_norm'].tolist()
+        
+        # Current index
+        try:
+            curr_idx = opts.index(deal_id)
+        except:
+            curr_idx = 0
+            
+        new_sel = st.selectbox("SWITCH ARTIST", opts, index=curr_idx, format_func=fmt_func, label_visibility="collapsed")
+        
+        if new_sel != deal_id:
+            st.session_state['selected_deal_id'] = new_sel
+            st.rerun()
         
     artist_name = deal_row.get('Artist / Project', 
                    deal_row.get('Artist', 
@@ -1475,6 +1513,19 @@ def show_detail(df_dash, df_act, deal_id):
                 deal_act['Rolling3'] = 0
                 deal_act['Net Receipts'] = 0
             
+            # --- MONTHLY RECEIPTS LIST (EXPANDER) ---
+            with st.expander("### > MONTHLY RECEIPTS (CLICK TO EXPAND)", expanded=False):
+                # Header
+                h1, h2 = st.columns([1, 1])
+                h1.markdown("**PERIOD**")
+                h2.markdown("**NET RECEIPTS**")
+                
+                # List all months (Ascending order as per dataframe sort)
+                for _, r in deal_act.iterrows():
+                    rc1, rc2 = st.columns([1, 1])
+                    rc1.markdown(f"<span style='color: #888;'>{r['DateStr']}</span>", unsafe_allow_html=True)
+                    rc2.markdown(f"<span style='color: #33ff00;'>${r['Net Receipts']:,.2f}</span>", unsafe_allow_html=True)
+
             # Forecast Data (Linear)
             # Use 'Target Amount' from deal_row to draw forecast line correctly
             target_amt = deal_row.get('Target Amount', adv_val) # adv_val is executed advance
