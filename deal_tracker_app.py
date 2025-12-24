@@ -171,31 +171,6 @@ st.markdown("""
     .deal-val-red { color: #ff3333; font-weight: bold; font-size: 1.1rem; }
     .deal-val-amber { color: #ffbf00; font-weight: bold; font-size: 1.1rem; }
     .deal-title { font-size: 1.3rem; font-weight: bold; color: #e6ffff; text-transform: uppercase; }
-
-    /* DEBUG BOX STYLING */
-    .debug-container {
-        border: 1px dashed #555;
-        padding: 10px;
-        margin-top: 20px;
-        background-color: #000;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 0.9rem;
-        color: #ccc;
-    }
-    .debug-title {
-        color: #ffbf00;
-        font-weight: bold;
-        margin-bottom: 5px;
-        border-bottom: 1px dashed #555;
-        display: block;
-    }
-    .debug-row {
-        display: flex;
-        justify_content: space-between;
-        margin-bottom: 2px;
-    }
-    .debug-key { color: #888; }
-    .debug-val { color: #e6ffff; }
     
 </style>
 """, unsafe_allow_html=True)
@@ -961,7 +936,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -1153,20 +1128,6 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-        
-    st.markdown("---")
-    
-    # Custom HTML for Debug Table
-    st.markdown(f"""
-    <div class="debug-container">
-        <span class="debug-title">🕵️ DEAL DETECTIVE (DEBUG)</span>
-        <div class="debug-row"><span class="debug-key">Forecast Start Date (Smart):</span> <span class="debug-val">{deal_row.get('Forecast Start Date')}</span></div>
-        <div class="debug-row"><span class="debug-key">Elapsed Months (Raw):</span> <span class="debug-val">{deal_row.get('Elapsed Months')}</span></div>
-        <div class="debug-row"><span class="debug-key">Effective Months (Mulligan):</span> <span class="debug-val">{max(0, deal_row.get('Elapsed Months',0) - 0.5)}</span></div>
-        <div class="debug-row"><span class="debug-key">Pace Ratio:</span> <span class="debug-val">{deal_row.get('Pace Ratio')}</span></div>
-        <div class="debug-row"><span class="debug-key">Target Amount:</span> <span class="debug-val">{deal_row.get('Target Amount')}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
