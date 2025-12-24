@@ -572,20 +572,7 @@ def process_data(df_dash, df_act, df_deals):
         
         # Now returns 6 values including is_legacy
         # Pass current_date_override and recent_velocity
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override, deal_meta=None)
-        
-        # NOTE: calculate_pace_metrics signature needs update to accept recent_velocity if passed explicitly
-        # But wait, my definition above: calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None)
-        # I need to pass recent_velocity. Let's fix the call and the def in previous step.
-        # Actually I can just pass it as a kwarg or update the signature.
-        # Redefining call to match logic:
-        # I will update the function signature in the code block above to include recent_velocity.
-        # Def was: def calculate_pace_metrics(row, count, current_date_override=None, deal_meta=None):
-        # I will change it in the file content.
-        
-        # RE-CALLING logic here for clarity of what I'm writing to file:
-        # The function definition in file content will be:
-        # def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
+        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, current_date_override, recent_velocity=recent_vel)
         
         grades.append(g)
         ratios.append(r)
@@ -956,7 +943,7 @@ def show_detail(df_dash, df_act, deal_id):
     pct_val = deal_row.get('% to BE Clean', 0) * 100
     
     start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
-    start_date_str = start_date.strftime('%b %d, %Y').upper() if pd.notna(start_date) else '-'
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
     be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
     be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
 
@@ -985,7 +972,7 @@ def show_detail(df_dash, df_act, deal_id):
         
         chart_val = min(1.0, max(0.0, actual_recoup))
         
-        if pace_ratio < 0.70:
+        if pace_ratio < 0.60:
             bar_color = 'red' 
         elif pace_ratio < 0.90:
             bar_color = 'orange' 
