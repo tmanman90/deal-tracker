@@ -1030,7 +1030,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         # Close = this month receipts
                         # Open  = prior month receipts
                         act["Close"] = pd.to_numeric(act["Net Receipts"], errors="coerce").fillna(0)
-                        act["Open"] = act["Close"].shift(1).fillna(act["Close"])
+                        act["Open"] = act["Close"].shift(1).fillna(0)
 
                         # Candle body bounds
                         act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
@@ -1071,7 +1071,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
                                 "DateStr:O",
                                 title=None,
                                 sort=None,
-                                axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00", labelAngle=0)
+                                axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00", labelAngle=0),
+                                scale=alt.Scale(paddingOuter=0.02, paddingInner=0.2)
                             )
                         )
 
