@@ -1542,7 +1542,7 @@ def show_detail(df_dash, df_act, deal_id):
                 # List all months (Ascending order as per dataframe sort)
                 for _, r in deal_act.iterrows():
                     rc1, rc2 = st.columns([1, 1])
-                    rc1.markdown(f"<span style='color: #888;'>{r['DateStr']}</span>", unsafe_allow_html=True)
+                    rc1.markdown(f"<span style='color: #ffbf00;'>{r['DateStr']}</span>", unsafe_allow_html=True)
                     rc2.markdown(f"<span style='color: #33ff00;'>${r['Net Receipts']:,.2f}</span>", unsafe_allow_html=True)
 
             # Forecast Data (Linear)
