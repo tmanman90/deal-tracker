@@ -21,11 +21,13 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0');
+
     /* MAIN TERMINAL BACKGROUND */
     .stApp {
         background-color: #050a0e;
         color: #33ff00;
-        font-family: 'Courier New', Courier, monospace; /* Base font, inheritable */
+        /* DO NOT set font-family here (it breaks icon ligatures) */
     }
     
     /* CRT SCANLINE EFFECT OVERLAY */
@@ -43,26 +45,29 @@ st.markdown("""
         pointer-events: none;
     }
 
-    /* TYPOGRAPHY */
-    /* Only force !important on text elements that Streamlit tries to make Sans-Serif */
-    h1, h2, h3, h4, h5, h6, p, label, li, a, .stMarkdown, .stDataFrame, input, button, textarea {
+    /* TERMINAL TYPOGRAPHY (TEXT ONLY) */
+    h1, h2, h3, h4, h5, h6,
+    p, label, li, a,
+    .stMarkdown, .stMarkdown *,
+    .stTextInput input, .stTextArea textarea,
+    .stButton button,
+    div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"],
+    .stDataFrame {
         font-family: 'Courier New', Courier, monospace !important;
         text-shadow: 0 0 2px #33ff00aa;
     }
     
-    /* Exclude generic 'div' and 'span' from the !important rule above to prevent breaking icons.
-       User content in divs will inherit Courier from .stApp automatically. */
-
-    /* EXPANDER ICON FIX */
-    /* Explicitly target the Streamlit expander arrow to ensure it uses the correct icon font */
-    div[data-testid="stExpander"] summary > span:first-child,
+    /* Make sure expander icons keep their icon font */
+    div[data-testid="stExpander"] summary [aria-hidden="true"],
+    div[data-testid="stExpander"] summary span[class*="material"],
+    div[data-testid="stExpander"] summary i,
     div[data-testid="stExpander"] summary > svg {
         font-family: "Material Symbols Rounded", "Material Icons" !important;
+        font-variation-settings: 'opsz' 24, 'wght' 400, 'FILL' 0, 'GRAD' 0;
         text-shadow: none !important;
-        font-weight: normal !important;
         opacity: 1 !important;
     }
-    
+
     h1 { color: #33ff00; letter-spacing: 2px; text-transform: uppercase; border-bottom: 2px solid #33ff00; padding-bottom: 10px; }
     h2, h3 { color: #ffbf00; } /* Amber secondary */
     
