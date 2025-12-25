@@ -1500,7 +1500,16 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            diag_html = f"""<div class="diagnostic-box">
+            # UPDATED LOGIC: If recouped, show suggested Re-Up
+            if is_recouped:
+                re_up_val = deal_row.get('Recent Velocity', 0) * 12
+                diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${re_up_val:,.0f}</span><br>{artist_type_line}{legacy_flag}
+</div>"""
+            else:
+                diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
 <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
