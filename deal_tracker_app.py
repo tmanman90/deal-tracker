@@ -548,6 +548,7 @@ def process_data(df_dash, df_act, df_deals):
     # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
     # AND COMPUTE PRINTER METRICS
     velocity_map = {}
+    lifetime_map = {} # New map for Lifetime Average
     
     # Compute Printer metrics
     printer_metrics = {} # Key: did, Value: dict of metrics
@@ -618,6 +619,13 @@ def process_data(df_dash, df_act, df_deals):
                  # --- TRICKLE DETECTION (Month 1 only) ---
                  receipts_list = group["Net Receipts"].astype(float).tolist()
                  is_trickle, trickle_reason = detect_trickle_first_month(receipts_list)
+                 
+                 # --- CALCULATE LIFETIME AVERAGE ---
+                 if receipts_list:
+                     lifetime_avg = float(np.mean(receipts_list))
+                 else:
+                     lifetime_avg = 0.0
+                 lifetime_map[did] = lifetime_avg
 
                  # --- SMA3 RAW vs ADJ ---
                  # RAW: last 3 months as-is
@@ -715,6 +723,7 @@ def process_data(df_dash, df_act, df_deals):
     expected_list = []
     legacy_list = []
     recent_velocity_list = []
+    lifetime_avg_list = [] # New list for Lifetime Avg
     recouped_date_list = [] # Store recoupment date
     
     # Printer Metric Lists
@@ -738,6 +747,9 @@ def process_data(df_dash, df_act, df_deals):
         
         # Get velocity (default 0)
         recent_vel = velocity_map.get(did, 0.0)
+        
+        # Get lifetime avg (default 0)
+        lifetime_val = lifetime_map.get(did, 0.0)
         
         # Get printer metrics
         pm = printer_metrics.get(did, {
@@ -779,6 +791,7 @@ def process_data(df_dash, df_act, df_deals):
         expected_list.append(exp_prog)
         legacy_list.append(is_leg)
         recent_velocity_list.append(recent_vel)
+        lifetime_avg_list.append(lifetime_val)
         recouped_date_list.append(recoup_date) # Can be NaT/None
         
     df_dash['Grade'] = grades
@@ -789,6 +802,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Expected Recoupment'] = expected_list
     df_dash['Is Legacy'] = legacy_list
     df_dash['Recent Velocity'] = recent_velocity_list
+    df_dash['Lifetime Avg'] = lifetime_avg_list
     df_dash['Recoupment Date'] = recouped_date_list
     
     # Add Printer Columns
@@ -1500,13 +1514,35 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            # UPDATED LOGIC: If recouped, show suggested Re-Up
+            # UPDATED LOGIC: If recouped, show suggested Re-Up with Trend Adjustment
             if is_recouped:
-                re_up_val = deal_row.get('Recent Velocity', 0) * 12
+                recent_vel = deal_row.get('Recent Velocity', 0)
+                lifetime_avg = deal_row.get('Lifetime Avg', 0)
+                
+                # 1. Base Re-Up (based on recent velocity annualized)
+                base_reup = recent_vel * 12
+                
+                # 2. Trend Ratio
+                if lifetime_avg > 0:
+                    trend_ratio = recent_vel / lifetime_avg
+                else:
+                    trend_ratio = 1.0 # Default if no history
+                
+                # 3. Multiplier (Capped at 1.0 - Asymmetric Safety)
+                multiplier = min(1.0, trend_ratio)
+                
+                # 4. Adjusted Re-Up
+                adjusted_reup = base_reup * multiplier
+                
+                # 5. Trend Note
+                trend_note = ""
+                if multiplier < 1.0:
+                     trend_note = "<br><span style='color: #ff3333; font-size: 0.8rem;'>📉 Discounted due to negative trend.</span>"
+                
                 diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${re_up_val:,.0f}</span><br>{artist_type_line}{legacy_flag}
+<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${adjusted_reup:,.0f}</span>{trend_note}<br>{artist_type_line}{legacy_flag}
 </div>"""
             else:
                 diag_html = f"""<div class="diagnostic-box">
