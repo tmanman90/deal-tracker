@@ -491,6 +491,19 @@ def process_data(df_dash, df_act, df_deals):
                 
                 df_dash = df_merged
 
+    # --- TAG PARSING (NEW) ---
+    if 'Tags' not in df_dash.columns:
+        df_dash['Tags'] = ''
+        
+    # Helper to parse tags
+    def parse_tags_list(val):
+        if pd.isna(val) or str(val).strip() == "":
+            return []
+        parts = [p.strip() for p in str(val).split(',')]
+        return [p for p in parts if p]
+
+    df_dash['Tags List'] = df_dash['Tags'].apply(parse_tags_list)
+
     # --- CALCULATE LABEL SHARE PCT & IS JV LOGIC ---
     # 1. Ensure columns exist if merge missed them
     if 'Artist Share' not in df_dash.columns:
@@ -934,14 +947,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
         sort_opt = st.selectbox("SORT BY", ["Grade", "Remaining to BE", "% to BE", "Cum Receipts", "Delta Months"], index=0)
 
     # TAG FILTER LOGIC
-    all_tags = []
-    if 'Tags' in df_dash.columns:
-        # Normalize and get unique non-empty tags
-        raw_tags = df_dash['Tags'].dropna().astype(str).unique()
-        for t in raw_tags:
-            if t.strip():
-                all_tags.append(t.strip())
-        all_tags = sorted(list(set(all_tags)))
+    all_tags = set()
+    if 'Tags List' in df_dash.columns:
+        for tags in df_dash['Tags List']:
+            all_tags.update(tags)
+    all_tags = sorted(list(all_tags))
         
     with col5:
         tag_filter = st.multiselect("TAGS", all_tags, default=[])
@@ -987,11 +997,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
         filtered = filtered[filtered['Is Eligible'] == True]
 
     # Apply Tag Filter
-    if tag_filter and 'Tags' in filtered.columns:
-        mask = pd.Series([False] * len(filtered))
-        for t in tag_filter:
-            mask = mask | filtered['Tags'].astype(str).str.contains(t, case=False, regex=False)
-        filtered = filtered[mask]
+    if tag_filter and 'Tags List' in filtered.columns:
+        # keep rows where ANY selected tag is in Tags List
+        filtered = filtered[filtered['Tags List'].apply(lambda x: any(t in x for t in tag_filter))]
         
     # Sort Logic
     ascending = False
@@ -1093,10 +1101,14 @@ def show_portfolio(df_dash, df_act, current_date_override):
         # Clean Data for Display
         artist = row.get('Artist / Project', row.get('Artist', 'Unknown'))
         
-        # Check for Tags and append badge if ANY text is present
-        tags = str(row.get('Tags', '')).strip()
-        if tags:
-            artist += f' <span style="font-size: 0.7em; border: 1px solid #33ff00; padding: 2px 6px; margin-left: 8px; border-radius: 4px; color: #33ff00;">{tags}</span>'
+        # Check for Tags and append multiple badges
+        tags_list = row.get('Tags List', [])
+        tags_html = ""
+        for t in tags_list:
+            tags_html += f' <span style="font-size: 0.7em; border: 1px solid #33ff00; padding: 2px 6px; margin-left: 4px; border-radius: 4px; color: #33ff00;">{t}</span>'
+            
+        if tags_html:
+            artist += tags_html
             
         did = row.get('did_norm', 'N/A')
         did_disp = row.get('Deal ID', 'N/A')
@@ -1222,157 +1234,189 @@ def show_portfolio(df_dash, df_act, current_date_override):
                     else:
                         # Keep last 24 periods for a clean terminal look
                         act = act.tail(24).copy()
-
-                        # "Candles" derived from month-to-month receipts
-                        # Close = this month receipts
-                        # Open  = prior month receipts
-                        act["Close"] = pd.to_numeric(act["Net Receipts"], errors="coerce").fillna(0)
-                        act["Open"] = act["Close"].shift(1)
-
-                        # --- TRICKLE VISUAL FIX (Approach A) ---
-                        # If Month 1 was flagged as trickle, we "ignore" it for comparisons by flattening Month2's candle:
-                        # Set Month2 Open = Month2 Close (prevents a giant "up candle" from a tiny/partial Month1)
-                        trickle_flag = False
-                        trickle_reason = ""
-                        # Pull trickle flag from DASHBOARD for the selected deal
-                        dash_row = eligible[eligible["did_norm"] == selected_id]
-                        if not dash_row.empty:
-                            trickle_flag = bool(dash_row.iloc[0].get("TrickleDetected", False))
-                            trickle_reason = str(dash_row.iloc[0].get("TrickleReason", "")).strip()
                         
-                        if trickle_flag and len(act) >= 2:
-                            # act is sorted by date, so second row is month 2
-                            idx_m2 = act.index[1]
-                            act.loc[idx_m2, "Open"] = act.loc[idx_m2, "Close"]
-
-                        # Candle body bounds
-                        act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
-                        act["BodyBot"] = act[["Open", "Close"]].min(axis=1)
-
-                        # Wicks (we don’t have intra-month high/low, so wick = body range)
-                        act["High"] = act["BodyTop"]
-                        act["Low"] = act["BodyBot"]
-
-                        # Moving averages
-                        act["SMA3_RAW"] = act["Close"].rolling(3).mean()
-                        if trickle_flag and len(act) >= 1:
-                            close_adj = act["Close"].copy()
-                            close_adj.iloc[0] = np.nan  # exclude Month 1
-                            # rolling mean ignores NaNs; min_periods=2 prevents Month2 from just echoing M2
-                            act["SMA3"] = close_adj.rolling(3, min_periods=2).mean()
-                        else:
-                            act["SMA3"] = act["SMA3_RAW"]
+                        # --- LABEL MODE LOGIC (Step 2C.1) ---
+                        is_lbl_mode = st.session_state.get('label_mode', False)
+                        valid_chart_data = True
+                        metric_prefix = ""
                         
-                        act["SMA6"] = act["Close"].rolling(6).mean()
-
-                        # Headline stats
-                        last_close = float(act["Close"].iloc[-1])
-                        prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
-                        
-                        # --- MoM TRICKLE GUARDRAIL (restored) ---
-                        TRICKLE_FLOOR = 50.0
-                        # Treat MoM as TRICKLE when the prior month denominator is tiny
-                        # (fixes cases like China where prev month is $0.04)
-                        mom_is_trickle = (len(act) >= 2 and prev_close <= TRICKLE_FLOOR)
-                        
-                        if mom_is_trickle:
-                            mom_pct = None
-                        else:
-                            mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
+                        # Calculate NetUsed based on mode
+                        if is_lbl_mode:
+                            metric_prefix = "LBL "
+                            # Get Label Share Pct
+                            lbl_pct = np.nan
+                            sel_row = eligible[eligible['did_norm'] == selected_id]
+                            if not sel_row.empty:
+                                lbl_pct = sel_row.iloc[0].get('Label Share Pct', np.nan)
                             
-                        sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
-
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("LAST MONTH", f"${last_close:,.0f}")
-                        
-                        if mom_pct is None:
-                            m2.metric("MoM %", "TRICKLE" if mom_is_trickle else "N/A")
+                            if pd.isna(lbl_pct) or lbl_pct <= 0:
+                                valid_chart_data = False
+                                m1, m2, m3 = st.columns(3)
+                                m1.metric(f"{metric_prefix}LAST MONTH", "N/A")
+                                m2.metric(f"{metric_prefix}MoM %", "N/A")
+                                m3.metric(f"{metric_prefix}RUN-RATE (SMA3)", "N/A")
+                                st.info("LABEL MODE: Missing Artist Share → cannot compute Label receipts for this deal.")
+                            else:
+                                act['NetUsed'] = act['Net Receipts'] * lbl_pct
                         else:
-                            m2.metric("MoM %", f"{mom_pct*100:+.1f}%")
+                             # Standard Mode
+                             act['NetUsed'] = act['Net Receipts']
+
+                        if valid_chart_data:
+                            # "Candles" derived from month-to-month receipts
+                            # Close = this month receipts
+                            # Open  = prior month receipts
+                            # USE NetUsed INSTEAD OF Net Receipts
+                            act["Close"] = pd.to_numeric(act["NetUsed"], errors="coerce").fillna(0)
+                            act["Open"] = act["Close"].shift(1)
+    
+                            # --- TRICKLE VISUAL FIX (Approach A) ---
+                            # If Month 1 was flagged as trickle, we "ignore" it for comparisons by flattening Month2's candle:
+                            # Set Month2 Open = Month2 Close (prevents a giant "up candle" from a tiny/partial Month1)
+                            trickle_flag = False
+                            trickle_reason = ""
+                            # Pull trickle flag from DASHBOARD for the selected deal
+                            dash_row = eligible[eligible["did_norm"] == selected_id]
+                            if not dash_row.empty:
+                                trickle_flag = bool(dash_row.iloc[0].get("TrickleDetected", False))
+                                trickle_reason = str(dash_row.iloc[0].get("TrickleReason", "")).strip()
                             
-                        m3.metric("RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
-                        
-                        if trickle_flag:
-                            safe_reason = sanitize_terminal_text(trickle_reason)
-                            st.markdown(
-                                f"""
-                                <div style="
-                                    margin-top: 6px;
-                                    color: #33ff00;
-                                    font-family: 'Courier New', monospace;
-                                    font-size: 12px;
-                                    white-space: nowrap;
-                                    word-break: normal;
-                                    overflow-x: auto;
-                                ">
-                                    TRICKLE DETECTED: {safe_reason if safe_reason else "TRUE"}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
+                            if trickle_flag and len(act) >= 2:
+                                # act is sorted by date, so second row is month 2
+                                idx_m2 = act.index[1]
+                                act.loc[idx_m2, "Open"] = act.loc[idx_m2, "Close"]
+    
+                            # Candle body bounds
+                            act["BodyTop"] = act[["Open", "Close"]].max(axis=1)
+                            act["BodyBot"] = act[["Open", "Close"]].min(axis=1)
+    
+                            # Wicks (we don’t have intra-month high/low, so wick = body range)
+                            act["High"] = act["BodyTop"]
+                            act["Low"] = act["BodyBot"]
+    
+                            # Moving averages
+                            act["SMA3_RAW"] = act["Close"].rolling(3).mean()
+                            if trickle_flag and len(act) >= 1:
+                                close_adj = act["Close"].copy()
+                                close_adj.iloc[0] = np.nan  # exclude Month 1
+                                # rolling mean ignores NaNs; min_periods=2 prevents Month2 from just echoing M2
+                                act["SMA3"] = close_adj.rolling(3, min_periods=2).mean()
+                            else:
+                                act["SMA3"] = act["SMA3_RAW"]
+                            
+                            act["SMA6"] = act["Close"].rolling(6).mean()
+    
+                            # Headline stats
+                            last_close = float(act["Close"].iloc[-1])
+                            prev_close = float(act["Close"].iloc[-2]) if len(act) >= 2 else last_close
+                            
+                            # --- MoM TRICKLE GUARDRAIL (restored) ---
+                            TRICKLE_FLOOR = 50.0
+                            if is_lbl_mode and pd.notna(lbl_pct):
+                                TRICKLE_FLOOR = TRICKLE_FLOOR * lbl_pct # Adjust floor for label share
+                                
+                            # Treat MoM as TRICKLE when the prior month denominator is tiny
+                            # (fixes cases like China where prev month is $0.04)
+                            mom_is_trickle = (len(act) >= 2 and prev_close <= TRICKLE_FLOOR)
+                            
+                            if mom_is_trickle:
+                                mom_pct = None
+                            else:
+                                mom_pct = ((last_close - prev_close) / prev_close) if prev_close else None
+                                
+                            sma3 = float(act["SMA3"].iloc[-1]) if pd.notna(act["SMA3"].iloc[-1]) else 0.0
+    
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric(f"{metric_prefix}LAST MONTH", f"${last_close:,.0f}")
+                            
+                            if mom_pct is None:
+                                m2.metric(f"{metric_prefix}MoM %", "TRICKLE" if mom_is_trickle else "N/A")
+                            else:
+                                m2.metric(f"{metric_prefix}MoM %", f"{mom_pct*100:+.1f}%")
+                                
+                            m3.metric(f"{metric_prefix}RUN-RATE (SMA3)", f"${sma3:,.0f}/mo")
+                            
+                            if trickle_flag:
+                                safe_reason = sanitize_terminal_text(trickle_reason)
+                                st.markdown(
+                                    f"""
+                                    <div style="
+                                        margin-top: 6px;
+                                        color: #33ff00;
+                                        font-family: 'Courier New', monospace;
+                                        font-size: 12px;
+                                        white-space: nowrap;
+                                        word-break: normal;
+                                        overflow-x: auto;
+                                    ">
+                                        TRICKLE DETECTED: {safe_reason if safe_reason else "TRUE"}
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
+    
+                            # CRITICAL FIX 2: Create a clean subset DF for Altair to prevent serialization errors
+                            chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA3_RAW", "SMA6"]].copy()
+                            # Ensure strictly datetime and reset index
+                            chart_data['Period End Date'] = pd.to_datetime(chart_data['Period End Date'])
+                            chart_data = chart_data.reset_index(drop=True)
+    
+                            # Make a compact month axis (Bloomberg feel)
+                            chart_data["DateStr"] = chart_data["Period End Date"].dt.strftime("%b %y")
+                            chart_data["MonthIndex"] = range(1, len(chart_data) + 1)
+                            
+                            # Remove the first month (which has no prior month to compare against)
+                            # This prevents the "giant green candle from zero" artifact
+                            chart_data = chart_data.dropna(subset=["Open"])
+    
+                            # Altair chart: terminal-style candles
+                            base = alt.Chart(chart_data).encode(
+                                x=alt.X(
+                                    "DateStr:O",
+                                    title=None,
+                                    sort=None,
+                                    axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00", labelAngle=0),
+                                    scale=alt.Scale(paddingOuter=0.02, paddingInner=0.2)
+                                )
                             )
-
-                        # CRITICAL FIX 2: Create a clean subset DF for Altair to prevent serialization errors
-                        chart_data = act[["Period End Date", "Open", "Close", "Low", "High", "BodyBot", "BodyTop", "SMA3", "SMA3_RAW", "SMA6"]].copy()
-                        # Ensure strictly datetime and reset index
-                        chart_data['Period End Date'] = pd.to_datetime(chart_data['Period End Date'])
-                        chart_data = chart_data.reset_index(drop=True)
-
-                        # Make a compact month axis (Bloomberg feel)
-                        chart_data["DateStr"] = chart_data["Period End Date"].dt.strftime("%b %y")
-                        chart_data["MonthIndex"] = range(1, len(chart_data) + 1)
-                        
-                        # Remove the first month (which has no prior month to compare against)
-                        # This prevents the "giant green candle from zero" artifact
-                        chart_data = chart_data.dropna(subset=["Open"])
-
-                        # Altair chart: terminal-style candles
-                        base = alt.Chart(chart_data).encode(
-                            x=alt.X(
-                                "DateStr:O",
-                                title=None,
-                                sort=None,
-                                axis=alt.Axis(labelColor="#33ff00", tickColor="#33ff00", labelAngle=0),
-                                scale=alt.Scale(paddingOuter=0.02, paddingInner=0.2)
+    
+                            # Wick
+                            wick = base.mark_rule(opacity=0.9, color="#33ff00").encode(
+                                y=alt.Y("Low:Q", title=None,
+                                        axis=alt.Axis(labelColor="#33ff00", grid=False, domain=False, ticks=False)),
+                                y2="High:Q"
                             )
-                        )
-
-                        # Wick
-                        wick = base.mark_rule(opacity=0.9, color="#33ff00").encode(
-                            y=alt.Y("Low:Q", title=None,
-                                    axis=alt.Axis(labelColor="#33ff00", grid=False, domain=False, ticks=False)),
-                            y2="High:Q"
-                        )
-
-                        # Body (green up, red down)
-                        body = base.mark_bar(size=10).encode(
-                            y="BodyBot:Q",
-                            y2="BodyTop:Q",
-                            color=alt.condition(
-                                "datum.Close >= datum.Open",
-                                alt.value("#33ff00"),
-                                alt.value("#ff3333")
-                            ),
-                            tooltip=[
-                                alt.Tooltip("Period End Date:T", title="Period"),
-                                alt.Tooltip("Open:Q", format=",.0f"),
-                                alt.Tooltip("Close:Q", format=",.0f"),
-                                alt.Tooltip("SMA3:Q", format=",.0f"),
-                                alt.Tooltip("SMA6:Q", format=",.0f"),
-                            ]
-                        )
-
-                        sma3_line = base.mark_line(strokeWidth=1, color="#ffbf00").encode(y="SMA3:Q")
-                        sma6_line = base.mark_line(strokeWidth=1, strokeDash=[3, 3], color="#b026ff").encode(y="SMA6:Q")
-
-                        chart = (
-                            alt.layer(wick, body, sma3_line, sma6_line)
-                            .properties(height=360)
-                            .configure(background="#050a0e")
-                            .configure_view(fill="#050a0e", stroke=None)
-                            .configure_axis(grid=False)
-                        )
-
-                        st.altair_chart(chart, use_container_width=True, theme=None)
+    
+                            # Body (green up, red down)
+                            body = base.mark_bar(size=10).encode(
+                                y="BodyBot:Q",
+                                y2="BodyTop:Q",
+                                color=alt.condition(
+                                    "datum.Close >= datum.Open",
+                                    alt.value("#33ff00"),
+                                    alt.value("#ff3333")
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("Period End Date:T", title="Period"),
+                                    alt.Tooltip("Open:Q", format=",.0f"),
+                                    alt.Tooltip("Close:Q", format=",.0f"),
+                                    alt.Tooltip("SMA3:Q", format=",.0f"),
+                                    alt.Tooltip("SMA6:Q", format=",.0f"),
+                                ]
+                            )
+    
+                            sma3_line = base.mark_line(strokeWidth=1, color="#ffbf00").encode(y="SMA3:Q")
+                            sma6_line = base.mark_line(strokeWidth=1, strokeDash=[3, 3], color="#b026ff").encode(y="SMA6:Q")
+    
+                            chart = (
+                                alt.layer(wick, body, sma3_line, sma6_line)
+                                .properties(height=360)
+                                .configure(background="#050a0e")
+                                .configure_view(fill="#050a0e", stroke=None)
+                                .configure_axis(grid=False)
+                            )
+    
+                            st.altair_chart(chart, use_container_width=True, theme=None)
             
             except Exception as e:
                 st.error(f"Error rendering Market Pulse chart: {str(e)}")
@@ -1457,13 +1501,14 @@ def show_detail(df_dash, df_act, deal_id):
     
     # --- TAGS IN TITLE ---
     # Check for Tags and create badge if present
-    tag_val = str(deal_row.get('Tags', '')).strip()
-    tag_html = ""
-    if tag_val:
-        tag_html = f'<span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{tag_val}</span>'
+    # Check for Tags and append multiple badges
+    tags_list = deal_row.get('Tags List', [])
+    tags_html = ""
+    for t in tags_list:
+        tags_html += f' <span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{t}</span>'
 
     # Render Title with Tag
-    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tag_html}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
