@@ -471,8 +471,8 @@ def process_data(df_dash, df_act, df_deals):
         if 'Deal ID' in df_deals.columns:
             df_deals['Deal ID Str'] = df_deals['Deal ID'].astype(str).str.strip()
             
-            # Columns to bring over, including 'Tags'
-            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months', 'Tags']
+            # Columns to bring over, including 'Tags', 'Artist Share', 'Is JV'
+            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months', 'Tags', 'Artist Share', 'Is JV']
             cols_existing = [c for c in cols_to_merge if c in df_deals.columns]
             
             if cols_existing and 'Deal ID Str' in df_dash.columns:
@@ -490,6 +490,42 @@ def process_data(df_dash, df_act, df_deals):
                     df_merged['Tags'] = df_merged['Tags'].fillna('')
                 
                 df_dash = df_merged
+
+    # ---------------------------------------------------------
+    # LABEL SHARE CALCULATION (NEW)
+    # ---------------------------------------------------------
+    # Helper to parse boolean reliably
+    def parse_bool(x):
+        return str(x).strip().upper() == 'TRUE'
+
+    # Ensure columns exist (if merge didn't happen or cols missing in DEALS)
+    if 'Artist Share' not in df_dash.columns:
+        df_dash['Artist Share'] = 0.0
+    if 'Is JV' not in df_dash.columns:
+        df_dash['Is JV'] = False
+        
+    label_shares = []
+    
+    for _, row in df_dash.iterrows():
+        # Artist Share
+        raw_share = row.get('Artist Share', 0)
+        ashare = clean_percent(raw_share)
+        
+        # Is JV
+        raw_jv = row.get('Is JV', False)
+        is_jv = parse_bool(raw_jv)
+        
+        # Logic: If share is 0/blank, Label Share is NaN
+        if ashare == 0.0:
+            lshare = np.nan
+        else:
+            lshare = 1.0 - ashare
+            if is_jv:
+                lshare = lshare * 0.5
+        
+        label_shares.append(lshare)
+        
+    df_dash['Label Share Pct'] = label_shares
 
     # 1. GLOBAL STRIP: Clean Deal IDs
     if 'Deal ID' in df_act.columns:
@@ -548,7 +584,6 @@ def process_data(df_dash, df_act, df_deals):
     # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
     # AND COMPUTE PRINTER METRICS
     velocity_map = {}
-    lifetime_map = {} # New map for Lifetime Average
     
     # Compute Printer metrics
     printer_metrics = {} # Key: did, Value: dict of metrics
@@ -619,13 +654,6 @@ def process_data(df_dash, df_act, df_deals):
                  # --- TRICKLE DETECTION (Month 1 only) ---
                  receipts_list = group["Net Receipts"].astype(float).tolist()
                  is_trickle, trickle_reason = detect_trickle_first_month(receipts_list)
-                 
-                 # --- CALCULATE LIFETIME AVERAGE ---
-                 if receipts_list:
-                     lifetime_avg = float(np.mean(receipts_list))
-                 else:
-                     lifetime_avg = 0.0
-                 lifetime_map[did] = lifetime_avg
 
                  # --- SMA3 RAW vs ADJ ---
                  # RAW: last 3 months as-is
@@ -723,7 +751,6 @@ def process_data(df_dash, df_act, df_deals):
     expected_list = []
     legacy_list = []
     recent_velocity_list = []
-    lifetime_avg_list = [] # New list for Lifetime Avg
     recouped_date_list = [] # Store recoupment date
     
     # Printer Metric Lists
@@ -747,9 +774,6 @@ def process_data(df_dash, df_act, df_deals):
         
         # Get velocity (default 0)
         recent_vel = velocity_map.get(did, 0.0)
-        
-        # Get lifetime avg (default 0)
-        lifetime_val = lifetime_map.get(did, 0.0)
         
         # Get printer metrics
         pm = printer_metrics.get(did, {
@@ -791,7 +815,6 @@ def process_data(df_dash, df_act, df_deals):
         expected_list.append(exp_prog)
         legacy_list.append(is_leg)
         recent_velocity_list.append(recent_vel)
-        lifetime_avg_list.append(lifetime_val)
         recouped_date_list.append(recoup_date) # Can be NaT/None
         
     df_dash['Grade'] = grades
@@ -802,7 +825,6 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Expected Recoupment'] = expected_list
     df_dash['Is Legacy'] = legacy_list
     df_dash['Recent Velocity'] = recent_velocity_list
-    df_dash['Lifetime Avg'] = lifetime_avg_list
     df_dash['Recoupment Date'] = recouped_date_list
     
     # Add Printer Columns
@@ -1514,35 +1536,13 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            # UPDATED LOGIC: If recouped, show suggested Re-Up with Trend Adjustment
+            # UPDATED LOGIC: If recouped, show suggested Re-Up
             if is_recouped:
-                recent_vel = deal_row.get('Recent Velocity', 0)
-                lifetime_avg = deal_row.get('Lifetime Avg', 0)
-                
-                # 1. Base Re-Up (based on recent velocity annualized)
-                base_reup = recent_vel * 12
-                
-                # 2. Trend Ratio
-                if lifetime_avg > 0:
-                    trend_ratio = recent_vel / lifetime_avg
-                else:
-                    trend_ratio = 1.0 # Default if no history
-                
-                # 3. Multiplier (Capped at 1.0 - Asymmetric Safety)
-                multiplier = min(1.0, trend_ratio)
-                
-                # 4. Adjusted Re-Up
-                adjusted_reup = base_reup * multiplier
-                
-                # 5. Trend Note
-                trend_note = ""
-                if multiplier < 1.0:
-                     trend_note = "<br><span style='color: #ff3333; font-size: 0.8rem;'>📉 Discounted due to negative trend.</span>"
-                
+                re_up_val = deal_row.get('Recent Velocity', 0) * 12
                 diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${adjusted_reup:,.0f}</span>{trend_note}<br>{artist_type_line}{legacy_flag}
+<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${re_up_val:,.0f}</span><br>{artist_type_line}{legacy_flag}
 </div>"""
             else:
                 diag_html = f"""<div class="diagnostic-box">
@@ -1660,44 +1660,3 @@ def show_detail(df_dash, df_act, deal_id):
                 elapsed = deal_row.get('Elapsed Months', 0)
                 
                 st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
-                
-                # Removed duplicate Re-Up display here as requested
-                
-            elif last_rolling > 0:
-                months_to_go = remaining / last_rolling
-                
-                # NEW LOGIC: Calculate Total Time to Recoup
-                elapsed = deal_row.get('Elapsed Months', 0)
-                total_months = elapsed + months_to_go
-                
-                st.markdown(f"""
-                BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
-                ESTIMATED TOTAL TIME TO RECOUP: **{total_months:.1f} MONTHS**
-                """)
-            else:
-                st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
-        else:
-             st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
-    else:
-        st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-
-# -----------------------------------------------------------------------------
-# MAIN APP LOOP
-# -----------------------------------------------------------------------------
-def main():
-    df_dash_raw, df_act_raw, df_deals_raw = load_data()
-    if df_dash_raw.empty:
-        st.error("DATABASE OFFLINE: CHECK CONNECTIONS OR SHEET HEADERS.")
-        st.stop()
-    
-    # Process returns 3 values
-    df_dash, df_act, current_date_override = process_data(df_dash_raw, df_act_raw, df_deals_raw)
-    
-    if 'selected_deal_id' in st.session_state:
-        show_detail(df_dash, df_act, st.session_state['selected_deal_id'])
-    else:
-        # Pass override date to show_portfolio for debug caption
-        show_portfolio(df_dash, df_act, current_date_override)
-
-if __name__ == "__main__":
-    main()
