@@ -743,6 +743,18 @@ def process_data(df_dash, df_act, df_deals):
             df_dash[col] = df_dash[col].apply(clean_currency)
         else:
             df_dash[col] = 0.0
+            
+    # --- COMPUTE LBL CUM ($) ---
+    # LBL Cum = Cum Receipts * Label Share Pct
+    # Do this AFTER 'Cum Receipts' is guaranteed numeric (clean_currency above)
+    if 'Label Share Pct' in df_dash.columns and 'Cum Receipts' in df_dash.columns:
+        df_dash['LBL Cum'] = np.where(
+            pd.notna(df_dash['Label Share Pct']),
+            df_dash['Cum Receipts'] * df_dash['Label Share Pct'],
+            np.nan
+        )
+    else:
+        df_dash['LBL Cum'] = np.nan
     
     # Calculate Data Eligibility
     eligibility_map = {}
@@ -906,7 +918,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("---")
     
     # --- FILTERS ---
-    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
     
     with col1:
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
@@ -933,6 +945,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     with col5:
         tag_filter = st.multiselect("TAGS", all_tags, default=[])
+        
+    with col6:
+        if "label_mode" not in st.session_state:
+            st.session_state.label_mode = False
+        label_mode_val = st.checkbox("LABEL MODE", value=st.session_state.label_mode)
+        st.session_state.label_mode = label_mode_val
     
     # Filter Logic
     filtered = df_dash.copy()
@@ -1000,24 +1018,18 @@ def show_portfolio(df_dash, df_act, current_date_override):
         filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
-    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     
-    kpi1.metric("ACTIVE DEALS", len(filtered))
-    
+    active_deals = len(filtered)
     total_adv = filtered['Executed Advance'].sum() if 'Executed Advance' in filtered.columns else 0
-    kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
-    
     total_rec = filtered['Cum Receipts'].sum() if 'Cum Receipts' in filtered.columns else 0
-    kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
+    total_lbl_cum = filtered['LBL Cum'].fillna(0).sum() if 'LBL Cum' in filtered.columns else 0
     
-    # Weighted % to BE
+    # Weighted Metrics Logic
+    w_pct = 0.0
     if total_adv > 0:
         w_pct = (total_rec / total_adv) * 100
-        kpi4.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
-    else:
-        kpi4.metric("WEIGHTED RECOUPMENT", "0.0%")
         
-    # Weighted Grade Calculation
+    w_grade = "N/A"
     if total_adv > 0 and 'Pace Ratio' in filtered.columns and 'Is Eligible' in filtered.columns:
         eligible_deals = filtered[filtered['Is Eligible'] == True]
         
@@ -1039,14 +1051,24 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 elif overall_ratio >= 0.60: w_grade = "C"
                 elif overall_ratio >= 0.50: w_grade = "D"
                 else: w_grade = "F"
-                
-                kpi5.metric("WEIGHTED GRADE", w_grade)
-            else:
-                kpi5.metric("WEIGHTED GRADE", "N/A")
-        else:
-            kpi5.metric("WEIGHTED GRADE", "N/A")
+    
+    if st.session_state.label_mode:
+        kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+        
+        kpi1.metric("ACTIVE DEALS", active_deals)
+        kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
+        kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
+        kpi4.metric("TOTAL LBL CUM", f"${total_lbl_cum:,.0f}")
+        kpi5.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
+        kpi6.metric("WEIGHTED GRADE", w_grade)
     else:
-        kpi5.metric("WEIGHTED GRADE", "N/A")
+        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+        
+        kpi1.metric("ACTIVE DEALS", active_deals)
+        kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
+        kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
+        kpi4.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
+        kpi5.metric("WEIGHTED GRADE", w_grade)
     
     st.markdown("---")
     
@@ -1060,6 +1082,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         <div style="flex: 1;">ID</div>
         <div style="flex: 1;">STATUS</div>
         <div style="flex: 1;">GRADE</div>
+        <div style="flex: 1.2; text-align: right;">LBL CUM</div>
         <div style="flex: 1; text-align: right;">RECOUPED</div>
         <div style="flex: 1.5; text-align: right;">REMAINING</div>
         <div style="flex: 1;"></div>
@@ -1097,7 +1120,16 @@ def show_portfolio(df_dash, df_act, current_date_override):
         rem_val = row.get('Remaining to BE', 0)
         rem_str = f"${rem_val:,.0f}" if isinstance(rem_val, (int, float)) else str(rem_val)
         
-        c1, c2, c3, c4, c5, c6, c7 = st.columns([3, 1, 1, 1, 1, 1.5, 1])
+        # New LBL CUM logic
+        lbl_val = row.get('LBL Cum', np.nan)
+        if pd.isna(lbl_val):
+            lbl_str = "—"
+            lbl_color = "#888"
+        else:
+            lbl_str = f"${float(lbl_val):,.0f}"
+            lbl_color = "#b026ff"
+        
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3, 1, 1, 1, 1.2, 1, 1.5, 1])
         
         with c1:
             st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}</div>", unsafe_allow_html=True)
@@ -1108,10 +1140,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
         with c4:
             st.markdown(f"<div style='padding-top: 5px; color: {grade_color}; font-weight: bold;'>{grade}</div>", unsafe_allow_html=True)
         with c5:
-            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #33ff00;'>{pct_str}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: {lbl_color}; font-weight: bold;'>{lbl_str}</div>", unsafe_allow_html=True)
         with c6:
-            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #ffbf00;'>{rem_str}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #33ff00;'>{pct_str}</div>", unsafe_allow_html=True)
         with c7:
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #ffbf00;'>{rem_str}</div>", unsafe_allow_html=True)
+        with c8:
             if st.button("OPEN", key=f"btn_open_{did}_{i}"):
                 st.session_state['selected_deal_id'] = did
                 st.rerun()
