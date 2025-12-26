@@ -471,8 +471,8 @@ def process_data(df_dash, df_act, df_deals):
         if 'Deal ID' in df_deals.columns:
             df_deals['Deal ID Str'] = df_deals['Deal ID'].astype(str).str.strip()
             
-            # Columns to bring over, including 'Tags'
-            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months', 'Tags']
+            # Columns to bring over, including 'Tags', 'Artist Share', 'Is JV'
+            cols_to_merge = ['Selected Strategy', 'Selected Advance', 'Label Breakeven Months', 'Tags', 'Artist Share', 'Is JV']
             cols_existing = [c for c in cols_to_merge if c in df_deals.columns]
             
             if cols_existing and 'Deal ID Str' in df_dash.columns:
@@ -490,6 +490,44 @@ def process_data(df_dash, df_act, df_deals):
                     df_merged['Tags'] = df_merged['Tags'].fillna('')
                 
                 df_dash = df_merged
+
+    # --- CALCULATE LABEL SHARE PCT & IS JV LOGIC ---
+    # 1. Ensure columns exist if merge missed them
+    if 'Artist Share' not in df_dash.columns:
+        df_dash['Artist Share'] = 0.0
+    if 'Is JV' not in df_dash.columns:
+        df_dash['Is JV'] = False
+        
+    # 2. Normalize Artist Share
+    df_dash['Artist Share Pct'] = df_dash['Artist Share'].apply(clean_percent)
+    
+    # 3. Normalize Is JV (Boolean)
+    def clean_jv_bool(val):
+        s = str(val).strip().upper()
+        # Common boolean string representations in Sheets
+        return s in ['TRUE', 'YES', '1', 'ON', 'CHECKED']
+
+    df_dash['Is JV Clean'] = df_dash['Is JV'].apply(clean_jv_bool)
+    
+    # 4. Compute Label Share Pct
+    def compute_label_share(row):
+        asp = row.get('Artist Share Pct', 0.0)
+        
+        # Missing-data rule: If Artist Share is blank/0, return NaN
+        # (clean_percent returns 0.0 for blanks/zeros)
+        if asp <= 0.0001: 
+            return np.nan
+            
+        # Label Share Pct = 1 - Artist Share Pct
+        label_share = 1.0 - asp
+        
+        # If Is JV is true -> Label Share Pct = Label Share Pct * 0.5
+        if row.get('Is JV Clean', False):
+            label_share = label_share * 0.5
+            
+        return label_share
+
+    df_dash['Label Share Pct'] = df_dash.apply(compute_label_share, axis=1)
 
     # 1. GLOBAL STRIP: Clean Deal IDs
     if 'Deal ID' in df_act.columns:
