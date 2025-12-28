@@ -1015,7 +1015,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("---")
     
     # --- FILTERS ---
-    col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6 = st.columns([1.25, 1.75, 1.0, 1.0, 1.1, 0.9])
     
     with col1:
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
