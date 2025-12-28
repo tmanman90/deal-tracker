@@ -929,11 +929,11 @@ def process_data(df_dash, df_act, df_deals):
         elif not e: # Not Eligible
             s_val = "Not Yet"
         elif delta_months < 0:
-            s_val = "Ahead of Track"
+            s_val = "V on Track"
         elif delta_months <= 1.0:
             s_val = "On Track"
         elif delta_months <= 2.0:
-            s_val = "Slightly Behind"
+            s_val = "Bit Behind"
         else:
             s_val = "Behind"
             
