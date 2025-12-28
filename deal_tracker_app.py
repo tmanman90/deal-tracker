@@ -831,6 +831,7 @@ def process_data(df_dash, df_act, df_deals):
     lifetime_avg_list = [] # New list for Lifetime Avg
     recouped_date_list = [] # Store recoupment date
     projected_recoup_list = [] # New list for ProjectedRecoupMonths
+    status_list = [] # Computed Status list
     
     # Printer Metric Lists
     pm_months_count = []
@@ -901,6 +902,43 @@ def process_data(df_dash, df_act, df_deals):
         recouped_date_list.append(recoup_date) # Can be NaT/None
         projected_recoup_list.append(round(proj_rec, 1))
         
+        # --- NEW COMPUTED STATUS LOGIC ---
+        # 1. Determine Target Breakeven (T)
+        # Use Legacy flag or Label Breakeven Months
+        if is_leg:
+            T = 12.0
+        else:
+            try:
+                lbm = row.get('Label Breakeven Months', 12)
+                T = float(str(lbm).replace(',','').strip())
+                if T <= 0: T = 12.0
+            except:
+                T = 12.0
+        
+        # 2. Determine Recouped State
+        # If Remaining <= 0 OR Recoupment Date exists
+        rem_val = clean_currency(row.get('Remaining to BE', 0))
+        is_recouped_status = (rem_val <= 0) or (recoup_date is not None)
+        
+        # 3. Calculate Delta
+        delta_months = proj_rec - T
+        
+        # 4. Assign Status
+        if is_recouped_status:
+            s_val = "Beat"
+        elif not e: # Not Eligible
+            s_val = "Not Yet"
+        elif delta_months < 0:
+            s_val = "Ahead of Track"
+        elif delta_months <= 1.0:
+            s_val = "On Track"
+        elif delta_months <= 2.0:
+            s_val = "Slightly Behind"
+        else:
+            s_val = "Behind"
+            
+        status_list.append(s_val)
+        
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
     df_dash['Is Eligible'] = is_eligible
@@ -912,6 +950,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Lifetime Avg'] = lifetime_avg_list
     df_dash['Recoupment Date'] = recouped_date_list
     df_dash['ProjectedRecoupMonths'] = projected_recoup_list
+    df_dash['Status'] = status_list # Override Sheet Status
     
     # Add Printer Columns
     df_dash['MonthsCount'] = pm_months_count
@@ -982,8 +1021,14 @@ def show_portfolio(df_dash, df_act, current_date_override):
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
         
     with col2:
-        all_status = df_dash['Status'].unique().tolist() if 'Status' in df_dash.columns else []
-        status_filter = st.multiselect("STATUS", all_status, default=all_status)
+        # Custom Status Order
+        status_order = ["Beat", "Ahead of Track", "On Track", "Slightly Behind", "Behind", "Not Yet"]
+        
+        # Get present statuses and sort by custom order
+        raw_status = df_dash['Status'].unique().tolist() if 'Status' in df_dash.columns else []
+        sorted_status = sorted(raw_status, key=lambda x: status_order.index(x) if x in status_order else 99)
+        
+        status_filter = st.multiselect("STATUS", sorted_status, default=sorted_status)
         
     with col3:
         eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
