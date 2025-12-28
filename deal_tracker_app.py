@@ -1015,7 +1015,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("---")
     
     # --- FILTERS ---
-    col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6 = st.columns([1.55, 2.45, 0.25, 1.05, 1.15, 1.10])
     
     with col1:
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
@@ -1031,7 +1031,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         status_filter = st.multiselect("STATUS", sorted_status, default=sorted_status)
         
     with col3:
-        eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
+        st.write("")  # spacer
         
     with col4:
         sort_opt = st.selectbox("SORT BY", ["Grade", "Remaining to BE", "% to BE", "Cum Receipts", "Delta Months"], index=0)
@@ -1048,9 +1048,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     with col6:
         if "label_mode" not in st.session_state:
-            st.session_state.label_mode = False
-        label_mode_val = st.checkbox("LABEL MODE", value=st.session_state.label_mode)
-        st.session_state.label_mode = label_mode_val
+        st.session_state.label_mode = False
+    label_mode_val = st.checkbox("LABEL MODE", value=st.session_state.label_mode)
+    st.session_state.label_mode = label_mode_val
+
+    eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
     
     # Filter Logic
     filtered = df_dash.copy()
