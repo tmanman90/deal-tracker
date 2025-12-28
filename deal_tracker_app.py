@@ -319,13 +319,15 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
     Uses current_date_override (latest data date) as 'today' for month calculation.
     
-    Implements 'Velocity Override': If recent velocity suggests strong performance, it overrides cumulative pace.
+    Implements Hybrid Grading:
+    - Blends Cumulative Ratio with Velocity Ratio based on maturity (elapsed months).
+    - Uses a run-rate based projection for Velocity Ratio.
     
-    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag).
+    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag, ProjectedRecoupMonths).
     """
     # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
-        return "N/A", 0.0, False, 0, 0.0, False
+        return "N/A", 0.0, False, 0, 0.0, False, 0.0
     
     # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
     
@@ -367,13 +369,13 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     # 3. Parse Dates
     try:
         if 'Forecast Start Date' not in row:
-             return "N/A", 0.0, False, 0, 0.0, False
+             return "N/A", 0.0, False, 0, 0.0, False, 0.0
              
         forecast_start = parse_flexible_date(row['Forecast Start Date'])
         if pd.isna(forecast_start):
-            return "N/A", 0.0, False, 0, 0.0, False
+            return "N/A", 0.0, False, 0, 0.0, False, 0.0
     except:
-        return "N/A", 0.0, False, 0, 0.0, False
+        return "N/A", 0.0, False, 0, 0.0, False, 0.0
         
     # 4. Calculate Elapsed Months vs Benchmark (Whole Months Logic)
     # Use override date (latest actuals date) if provided, else today
@@ -418,20 +420,39 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     else:
         cumulative_ratio = actual_progress / expected_progress
 
-    # --- VELOCITY OVERRIDE LOGIC ---
-    # Calculate Velocity Pace
+    # --- HYBRID GRADING SYSTEM (Velocity + Blend) ---
+    
+    # 1. Determine Velocity Ratio based on Projected Recoup Time
+    run_rate = recent_velocity  # This is max(rr_last3, rr_last2) passed from process_data
     velocity_ratio = 0.0
-    if count >= 3 and target_amount_for_grading > 0:
-        # Extrapolate last 3 mo avg to 12 months
-        projected_annual = recent_velocity * 12.0
-        # Compare to Target (Executed Advance)
-        velocity_ratio = projected_annual / target_amount_for_grading
-
-    # Final Pace Ratio: Best of Cumulative vs Velocity
-    pace_ratio = max(cumulative_ratio, velocity_ratio)
+    proj_total_months_vel = 0.0
+    
+    remaining = max(target_amount_for_grading - cum_receipts, 0)
+    
+    if run_rate > 0:
+        proj_total_months_vel = elapsed_months + (remaining / run_rate)
+        if proj_total_months_vel > 0:
+            velocity_ratio = target_months / proj_total_months_vel
+    else:
+        # If no velocity, projection is effectively infinite (ratio 0)
+        proj_total_months_vel = 999.0 
+        velocity_ratio = 0.0
         
-    # --- GRADING BANDS (THE SAFE BET SCALE) ---
-    # A++: >= 2.0 (Recoup in 6 months or less)
+    # 2. Blend Weights based on Elapsed Months
+    if elapsed_months < 3:
+        w_vel = 0.0  # (Technically captured by Eligibility check < 3, but safe fallback)
+    elif elapsed_months < 5:
+        w_vel = 0.30
+    else:
+        w_vel = 0.40
+        
+    # 3. Calculate Pace Ratio (Weighted Blend)
+    # Do NOT use max() override.
+    pace_ratio = ((1.0 - w_vel) * cumulative_ratio) + (w_vel * velocity_ratio)
+        
+    # --- GRADING BANDS (Updated for A/A++ Alignment) ---
+    # A++: >= 2.0 (Recoup in half the time)
+    # A:   >= 1.0 (Recoup on time)
     if pace_ratio >= 2.0: grade = "A++"
     elif pace_ratio >= 1.15: grade = "A+"
     elif pace_ratio >= 1.00: grade = "A"
@@ -440,8 +461,15 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     elif pace_ratio >= 0.60: grade = "C"
     elif pace_ratio >= 0.40: grade = "D"
     else: grade = "F"
+    
+    # --- NEW METRIC: ProjectedRecoupMonths ---
+    # If already recouped, use actual elapsed. Else use velocity projection.
+    if cum_receipts >= target_amount_for_grading:
+        projected_recoup_months = elapsed_months
+    else:
+        projected_recoup_months = proj_total_months_vel
         
-    return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy
+    return grade, pace_ratio, True, elapsed_months, expected_progress, is_legacy, projected_recoup_months
 
 def sanitize_terminal_text(s: str) -> str:
     if s is None:
@@ -704,11 +732,25 @@ def process_data(df_dash, df_act, df_deals):
                  # Effective SMA used by the app (keeps existing logic intact)
                  sma3_effective = sma3_adj if is_trickle else sma3_raw
 
+                 # --- UPDATED VELOCITY LOGIC: LAG-AWARE RUN RATE ---
+                 # rr_last3 = mean(last 3 months) -> Use existing sma3_effective logic
+                 rr_last3 = sma3_effective
+                 
+                 # rr_last2 = mean(last 2 months)
+                 rr_last2 = 0.0
+                 if months_count >= 2:
+                     rr_last2 = float(np.mean(receipts_list[-2:]))
+                 elif months_count == 1:
+                     rr_last2 = float(receipts_list[0])
+                     
+                 # Run Rate = Max of Last 3 vs Last 2
+                 run_rate = max(rr_last3, rr_last2)
+
                  # Printer score uses effective SMA
                  printer_score = (last_month_val / sma3_effective) if sma3_effective > 0 else 0.0
                  
-                 # Velocity map used by Pace Metrics uses effective SMA
-                 velocity_map[did] = sma3_effective
+                 # Velocity map used by Pace Metrics now uses the Lag-Aware Run Rate
+                 velocity_map[did] = run_rate
                  
                  # Printer Eligibility
                  # (MonthsCount >= 4) AND (SMA3 >= 500)
@@ -788,6 +830,7 @@ def process_data(df_dash, df_act, df_deals):
     recent_velocity_list = []
     lifetime_avg_list = [] # New list for Lifetime Avg
     recouped_date_list = [] # Store recoupment date
+    projected_recoup_list = [] # New list for ProjectedRecoupMonths
     
     # Printer Metric Lists
     pm_months_count = []
@@ -842,9 +885,9 @@ def process_data(df_dash, df_act, df_deals):
         else:
             deal_calc_date = current_date_override
         
-        # Now returns 6 values including is_legacy
+        # Now returns 7 values including is_legacy and projected_recoup
         # Pass deal_calc_date to fix "fractional month" / freeze logic
-        g, r, e, el_m, exp_prog, is_leg = calculate_pace_metrics(row, count, deal_calc_date, recent_velocity=recent_vel)
+        g, r, e, el_m, exp_prog, is_leg, proj_rec = calculate_pace_metrics(row, count, deal_calc_date, recent_velocity=recent_vel)
         
         grades.append(g)
         ratios.append(r)
@@ -856,6 +899,7 @@ def process_data(df_dash, df_act, df_deals):
         recent_velocity_list.append(recent_vel)
         lifetime_avg_list.append(lifetime_val)
         recouped_date_list.append(recoup_date) # Can be NaT/None
+        projected_recoup_list.append(round(proj_rec, 1))
         
     df_dash['Grade'] = grades
     df_dash['Pace Ratio'] = ratios
@@ -867,6 +911,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Recent Velocity'] = recent_velocity_list
     df_dash['Lifetime Avg'] = lifetime_avg_list
     df_dash['Recoupment Date'] = recouped_date_list
+    df_dash['ProjectedRecoupMonths'] = projected_recoup_list
     
     # Add Printer Columns
     df_dash['MonthsCount'] = pm_months_count
