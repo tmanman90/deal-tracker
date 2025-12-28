@@ -929,11 +929,11 @@ def process_data(df_dash, df_act, df_deals):
         elif not e: # Not Eligible
             s_val = "Not Yet"
         elif delta_months < 0:
-            s_val = "V on Track"
+            s_val = "Ahead of Track"
         elif delta_months <= 1.0:
             s_val = "On Track"
         elif delta_months <= 2.0:
-            s_val = "Bit Behind"
+            s_val = "Slightly Behind"
         else:
             s_val = "Behind"
             
@@ -1015,7 +1015,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("---")
     
     # --- FILTERS ---
-    col1, col2, col3, col4, col5, col6 = st.columns([1.25, 1.75, 1.0, 1.0, 1.1, 0.9])
+    col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
     
     with col1:
         search = st.text_input("SEARCH ARTIST OR DEAL ID", "").lower()
