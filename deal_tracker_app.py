@@ -1421,8 +1421,310 @@ def show_portfolio(df_dash, df_act, current_date_override):
             except Exception as e:
                 st.error(f"Error rendering Market Pulse chart: {str(e)}")
 
-    # REMOVED: MARKET PULSE // PRINTERS NOW SECTION AS REQUESTED
+    # ---------------------------------------------------------------------
+    # RANGE SCANNER MODULE (NEW)
+    # ---------------------------------------------------------------------
+    st.markdown("### > LABEL SHARE // RANGE SCANNER")
+    
+    if df_act.empty or 'Period End Date' not in df_act.columns:
+        st.warning("Range Scanner unavailable: No Actuals data.")
+    else:
+        # 1. Build Date Options
+        valid_dates = df_act.dropna(subset=['Period End Date'])['Period End Date'].unique()
+        valid_dates = sorted(valid_dates)
         
+        if not valid_dates:
+            st.warning("Range Scanner unavailable: No valid dates found.")
+        else:
+            # Create readable labels "Oct 2025" -> Date object map
+            date_map = {pd.to_datetime(d).strftime('%b %Y'): pd.to_datetime(d) for d in valid_dates}
+            month_labels = list(date_map.keys())
+            
+            # Default: Last 3 months
+            default_end_idx = len(month_labels) - 1
+            default_start_idx = max(0, default_end_idx - 2)
+            
+            rs_c1, rs_c2 = st.columns(2)
+            with rs_c1:
+                # ADDED KEY TO PREVENT CONFLICT
+                start_month_str = st.selectbox("START MONTH", month_labels, index=default_start_idx, key="rs_start")
+            with rs_c2:
+                # ADDED KEY TO PREVENT CONFLICT
+                end_month_str = st.selectbox("END MONTH", month_labels, index=default_end_idx, key="rs_end")
+                
+            start_date = date_map[start_month_str]
+            end_date = date_map[end_month_str]
+            
+            if start_date > end_date:
+                st.error("INVALID RANGE: Start Month must be before or equal to End Month.")
+            else:
+                # 2. Filters Row
+                f_c1, f_c2, f_c3, f_c4 = st.columns(4)
+                
+                # A) Artists
+                # Use Artist / Project if available, else Artist
+                if 'Artist / Project' in df_dash.columns:
+                    art_col = 'Artist / Project'
+                else:
+                    art_col = 'Artist'
+                
+                all_artists = sorted(df_dash[art_col].dropna().unique().tolist())
+                with f_c1:
+                    # ADDED KEY TO PREVENT CONFLICT
+                    sel_artists = st.multiselect("ARTISTS", all_artists, default=[], key="rs_artists")
+                    
+                # B) Tags (from Tags List)
+                all_tags_scan = set()
+                if 'Tags List' in df_dash.columns:
+                    for t_list in df_dash['Tags List']:
+                        all_tags_scan.update(t_list)
+                all_tags_scan = sorted(list(all_tags_scan))
+                with f_c2:
+                    # ADDED KEY TO PREVENT CONFLICT
+                    sel_tags = st.multiselect("TAGS", all_tags_scan, default=[], key="rs_tags")
+                    
+                # C) JV Filter (Is JV Clean)
+                with f_c3:
+                    # ADDED KEY TO PREVENT CONFLICT
+                    jv_mode = st.selectbox("JV FILTER", ["ALL", "JV ONLY", "NON-JV ONLY"], index=0, key="rs_jv")
+                    
+                # D) View Mode
+                with f_c4:
+                    # ADDED KEY TO PREVENT CONFLICT
+                    view_mode = st.selectbox("VIEW MODE", ["SUMMARY", "DRIVERS", "FULL BREAKDOWN"], index=0, key="rs_view")
+                    
+                # 3. Define Deal Universe (df_dash filtered)
+                # Start with all valid deals
+                scanner_universe = df_dash[
+                    df_dash['did_norm'].notna() & 
+                    (df_dash['did_norm'] != "") & 
+                    (df_dash['did_norm'].str.lower() != "nan")
+                ].copy()
+                
+                # Apply Artist Filter
+                if sel_artists:
+                    scanner_universe = scanner_universe[scanner_universe[art_col].isin(sel_artists)]
+                    
+                # Apply Tag Filter (ANY match)
+                if sel_tags and 'Tags List' in scanner_universe.columns:
+                    scanner_universe = scanner_universe[scanner_universe['Tags List'].apply(lambda x: any(t in x for t in sel_tags))]
+                    
+                # Apply JV Filter
+                if jv_mode == "JV ONLY":
+                    scanner_universe = scanner_universe[scanner_universe['Is JV Clean'] == True]
+                elif jv_mode == "NON-JV ONLY":
+                    scanner_universe = scanner_universe[scanner_universe['Is JV Clean'] == False]
+                    
+                universe_ids = scanner_universe['did_norm'].unique()
+                
+                if len(universe_ids) == 0:
+                    st.warning("No deals match current filters.")
+                else:
+                    # 4. Compute Range Receipts
+                    # Filter df_act for Universe IDs AND Date Range
+                    range_act = df_act[
+                        (df_act['did_norm'].isin(universe_ids)) &
+                        (df_act['Period End Date'] >= start_date) &
+                        (df_act['Period End Date'] <= end_date)
+                    ].copy()
+                    
+                    # Group by Deal ID to get Range Receipts
+                    if not range_act.empty:
+                        range_sums = range_act.groupby('did_norm')['Net Receipts'].sum().reset_index()
+                        range_sums.rename(columns={'Net Receipts': 'Range Receipts'}, inplace=True)
+                    else:
+                        range_sums = pd.DataFrame(columns=['did_norm', 'Range Receipts'])
+                        
+                    # Merge Range Data into Universe
+                    # (Left merge to keep deals with 0 receipts in range if they are in universe)
+                    scanner_data = scanner_universe.merge(range_sums, on='did_norm', how='left')
+                    scanner_data['Range Receipts'] = scanner_data['Range Receipts'].fillna(0.0)
+                    
+                    # Compute Range Label Share
+                    # Range Label Share = Range Receipts * Label Share Pct
+                    # If Label Share Pct is NaN -> Range Label Share is NaN
+                    scanner_data['Range Label Share'] = np.where(
+                        pd.notna(scanner_data['Label Share Pct']),
+                        scanner_data['Range Receipts'] * scanner_data['Label Share Pct'],
+                        np.nan
+                    )
+                    
+                    # Ensure All-Time columns exist
+                    if 'LBL Cum' not in scanner_data.columns:
+                        scanner_data['LBL Cum'] = np.nan
+                    if 'Cum Receipts' not in scanner_data.columns:
+                        scanner_data['Cum Receipts'] = 0.0
+                        
+                    # 5. Render Outputs
+                    
+                    # --- MODE: SUMMARY ---
+                    if view_mode == "SUMMARY":
+                        k1, k2, k3, k4, k5, k6 = st.columns(6)
+                        
+                        # Aggregates
+                        total_range_receipts = scanner_data['Range Receipts'].sum()
+                        total_range_lbl = scanner_data['Range Label Share'].sum() # Sums non-NaNs automatically
+                        
+                        active_in_range = len(scanner_data[scanner_data['Range Receipts'] > 0])
+                        deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()])
+                        
+                        cum_all_time = scanner_data['Cum Receipts'].sum()
+                        lbl_cum_all_time = scanner_data['LBL Cum'].sum()
+                        
+                        k1.metric("RANGE RECEIPTS", f"${total_range_receipts:,.0f}")
+                        k2.metric("RANGE LBL SHARE", f"${total_range_lbl:,.0f}")
+                        k3.metric("ACTIVE (RANGE)", active_in_range)
+                        k4.metric("DEALS W/ SHARE", deals_w_share)
+                        k5.metric("CUM (ALL TIME)", f"${cum_all_time:,.0f}")
+                        k6.metric("LBL CUM (ALL TIME)", f"${lbl_cum_all_time:,.0f}")
+                        
+                    # --- MODE: DRIVERS ---
+                    elif view_mode == "DRIVERS":
+                        st.markdown("##### > TOP 10 DRIVERS (SORTED BY RANGE LABEL SHARE)")
+                        
+                        # Sort by Range Label Share Descending (NaNs at end)
+                        drivers = scanner_data.sort_values('Range Label Share', ascending=False, na_position='last').head(10)
+                        
+                        # Custom Table Header
+                        st.markdown("""
+                        <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00; font-size: 0.9em;">
+                            <div style="flex: 3;">ARTIST / PROJECT</div>
+                            <div style="flex: 1.5; text-align: right;">RANGE RECEIPTS</div>
+                            <div style="flex: 1.5; text-align: right;">RANGE LBL SHARE</div>
+                            <div style="flex: 1; text-align: right;">LBL %</div>
+                            <div style="flex: 0.8; text-align: center;">IS JV</div>
+                            <div style="flex: 2; padding-left: 15px;">TAGS</div>
+                            <div style="flex: 0.8;"></div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        for i, row in enumerate(drivers.to_dict('records')):
+                            name = row.get(art_col, 'Unknown')
+                            rr = row.get('Range Receipts', 0)
+                            rls = row.get('Range Label Share', np.nan)
+                            lpct = row.get('Label Share Pct', np.nan)
+                            is_jv = row.get('Is JV Clean', False)
+                            tags_l = row.get('Tags List', [])
+                            
+                            # Formatting
+                            rr_str = f"${rr:,.0f}"
+                            if pd.isna(rls):
+                                rls_str = "N/A"
+                                rls_color = "#888"
+                            else:
+                                rls_str = f"${rls:,.0f}"
+                                rls_color = "#b026ff" # Purple
+                                
+                            if pd.isna(lpct):
+                                lpct_str = "-"
+                            else:
+                                lpct_str = f"{lpct*100:.1f}%"
+                                
+                            jv_str = "YES" if is_jv else "NO"
+                            
+                            # Tags Badge String
+                            tags_html = ""
+                            for t in tags_l[:3]: # Max 3
+                                tags_html += f'<span style="border:1px solid #33ff00; border-radius:3px; padding:1px 4px; font-size:0.7em; margin-right:4px; color:#33ff00;">{t}</span>'
+                            if len(tags_l) > 3:
+                                tags_html += f'<span style="font-size:0.7em; color:#888;">+{len(tags_l)-3}</span>'
+                                
+                            # ID for open
+                            did_val = row.get('did_norm')
+                            
+                            dc1, dc2, dc3, dc4, dc5, dc6, dc7 = st.columns([3, 1.5, 1.5, 1, 0.8, 2, 0.8])
+                            
+                            with dc1: st.markdown(f"<div style='font-weight:bold; color:#e6ffff;'>{name}</div>", unsafe_allow_html=True)
+                            with dc2: st.markdown(f"<div style='text-align:right; color:#33ff00;'>{rr_str}</div>", unsafe_allow_html=True)
+                            with dc3: st.markdown(f"<div style='text-align:right; color:{rls_color}; font-weight:bold;'>{rls_str}</div>", unsafe_allow_html=True)
+                            with dc4: st.markdown(f"<div style='text-align:right;'>{lpct_str}</div>", unsafe_allow_html=True)
+                            with dc5: st.markdown(f"<div style='text-align:center;'>{jv_str}</div>", unsafe_allow_html=True)
+                            with dc6: st.markdown(f"<div>{tags_html}</div>", unsafe_allow_html=True)
+                            with dc7:
+                                if st.button("OPEN", key=f"drv_open_{i}"):
+                                    st.session_state['selected_deal_id'] = did_val
+                                    st.rerun()
+                            st.markdown("<div style='border-bottom: 1px solid #222; margin-bottom: 3px;'></div>", unsafe_allow_html=True)
+
+                    # --- MODE: FULL BREAKDOWN ---
+                    elif view_mode == "FULL BREAKDOWN":
+                        st.markdown(f"##### > FULL BREAKDOWN ({len(scanner_data)} DEALS)")
+                        
+                        # Table Header
+                        st.markdown("""
+                        <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00; font-size: 0.85em;">
+                            <div style="flex: 2.5;">ARTIST / PROJECT</div>
+                            <div style="flex: 1;">DEAL ID</div>
+                            <div style="flex: 1.5;">TAGS</div>
+                            <div style="flex: 0.5; text-align: center;">JV</div>
+                            <div style="flex: 0.8; text-align: right;">ART%</div>
+                            <div style="flex: 0.8; text-align: right;">LBL%</div>
+                            <div style="flex: 1.2; text-align: right;">RNG RECPT</div>
+                            <div style="flex: 1.2; text-align: right;">RNG LBL</div>
+                            <div style="flex: 1.2; text-align: right;">CUM (ALL)</div>
+                            <div style="flex: 1.2; text-align: right;">LBL (ALL)</div>
+                            <div style="flex: 0.7;"></div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Sort by Range Label Share desc by default
+                        full_table = scanner_data.sort_values('Range Label Share', ascending=False, na_position='last')
+                        
+                        for i, row in enumerate(full_table.to_dict('records')):
+                            name = row.get(art_col, 'Unknown')
+                            did_disp = row.get('Deal ID', 'N/A')
+                            
+                            tags_l = row.get('Tags List', [])
+                            is_jv = row.get('Is JV Clean', False)
+                            
+                            asp = row.get('Artist Share Pct', 0)
+                            lsp = row.get('Label Share Pct', np.nan)
+                            
+                            rr = row.get('Range Receipts', 0)
+                            rls = row.get('Range Label Share', np.nan)
+                            
+                            cum = row.get('Cum Receipts', 0)
+                            lbl_cum = row.get('LBL Cum', np.nan)
+                            
+                            # Format
+                            tags_str = ", ".join(tags_l[:2]) + ("..." if len(tags_l)>2 else "")
+                            jv_char = "Y" if is_jv else "N"
+                            
+                            asp_str = f"{asp*100:.0f}%" if asp > 0 else "-"
+                            if pd.isna(lsp): lsp_str = "-"
+                            else: lsp_str = f"{lsp*100:.0f}%"
+                            
+                            rr_str = f"${rr:,.0f}"
+                            
+                            if pd.isna(rls): rls_str = "-"
+                            else: rls_str = f"${rls:,.0f}"
+                            
+                            cum_str = f"${cum:,.0f}"
+                            
+                            if pd.isna(lbl_cum): lbl_cum_str = "-"
+                            else: lbl_cum_str = f"${lbl_cum:,.0f}"
+                            
+                            did_val = row.get('did_norm')
+                            
+                            col_spec = [2.5, 1, 1.5, 0.5, 0.8, 0.8, 1.2, 1.2, 1.2, 1.2, 0.7]
+                            cols = st.columns(col_spec)
+                            
+                            with cols[0]: st.markdown(f"<div style='white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e6ffff;'>{name}</div>", unsafe_allow_html=True)
+                            with cols[1]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{did_disp}</div>", unsafe_allow_html=True)
+                            with cols[2]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{tags_str}</div>", unsafe_allow_html=True)
+                            with cols[3]: st.markdown(f"<div style='text-align:center;'>{jv_char}</div>", unsafe_allow_html=True)
+                            with cols[4]: st.markdown(f"<div style='text-align:right; color:#888;'>{asp_str}</div>", unsafe_allow_html=True)
+                            with cols[5]: st.markdown(f"<div style='text-align:right;'>{lsp_str}</div>", unsafe_allow_html=True)
+                            with cols[6]: st.markdown(f"<div style='text-align:right; color:#33ff00;'>{rr_str}</div>", unsafe_allow_html=True)
+                            with cols[7]: st.markdown(f"<div style='text-align:right; color:#b026ff; font-weight:bold;'>{rls_str}</div>", unsafe_allow_html=True)
+                            with cols[8]: st.markdown(f"<div style='text-align:right; color:#888;'>{cum_str}</div>", unsafe_allow_html=True)
+                            with cols[9]: st.markdown(f"<div style='text-align:right; color:#888;'>{lbl_cum_str}</div>", unsafe_allow_html=True)
+                            with cols[10]:
+                                if st.button("GO", key=f"full_open_{i}"):
+                                    st.session_state['selected_deal_id'] = did_val
+                                    st.rerun()
+                            st.markdown("<div style='border-bottom: 1px solid #111; margin-bottom: 1px;'></div>", unsafe_allow_html=True)
+
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
