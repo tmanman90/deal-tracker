@@ -1764,46 +1764,46 @@ def show_detail(df_dash, df_act, deal_id):
             st.rerun()
 
     with top_c2:
-        # Dropdown logic
-        # Filter usable rows
-        valid_opts = df_dash[df_dash['did_norm'].notna() & (df_dash['did_norm'] != "")].copy()
+        # Layout: Switcher (Left) | Label Toggle (Right)
+        switch_c, toggle_c = st.columns([3, 1])
         
-        # Sort for easy finding
-        valid_opts['sort_name'] = valid_opts.apply(lambda x: str(x.get('Artist / Project', x.get('Artist', ''))).lower(), axis=1)
-        valid_opts = valid_opts.sort_values('sort_name')
-        
-        # Build labels
-        def fmt_func(did):
-            row = valid_opts[valid_opts['did_norm'] == did]
-            if not row.empty:
-                r = row.iloc[0]
-                art = r.get('Artist / Project', r.get('Artist', 'Unknown'))
-                grd = r.get('Grade', 'PENDING') if r.get('Is Eligible', False) else 'PENDING'
-                return f"{art} ({grd})"
-            return did
+        with switch_c:
+            # Dropdown logic
+            valid_opts = df_dash[df_dash['did_norm'].notna() & (df_dash['did_norm'] != "")].copy()
+            valid_opts['sort_name'] = valid_opts.apply(lambda x: str(x.get('Artist / Project', x.get('Artist', ''))).lower(), axis=1)
+            valid_opts = valid_opts.sort_values('sort_name')
             
-        # Get options list
-        opts = valid_opts['did_norm'].tolist()
-        
-        # Current index
-        try:
-            curr_idx = opts.index(deal_id)
-        except:
-            curr_idx = 0
+            def fmt_func(did):
+                row = valid_opts[valid_opts['did_norm'] == did]
+                if not row.empty:
+                    r = row.iloc[0]
+                    art = r.get('Artist / Project', r.get('Artist', 'Unknown'))
+                    grd = r.get('Grade', 'PENDING') if r.get('Is Eligible', False) else 'PENDING'
+                    return f"{art} ({grd})"
+                return did
+                
+            opts = valid_opts['did_norm'].tolist()
+            try:
+                curr_idx = opts.index(deal_id)
+            except:
+                curr_idx = 0
+                
+            new_sel = st.selectbox("SWITCH ARTIST", opts, index=curr_idx, format_func=fmt_func, label_visibility="collapsed")
             
-        new_sel = st.selectbox("SWITCH ARTIST", opts, index=curr_idx, format_func=fmt_func, label_visibility="collapsed")
+            if new_sel != deal_id:
+                st.session_state['selected_deal_id'] = new_sel
+                st.rerun()
         
-        if new_sel != deal_id:
-            st.session_state['selected_deal_id'] = new_sel
-            st.rerun()
+        with toggle_c:
+            # A) Deal Detail local “Label View” toggle
+            # Defaults to False (unchecked) if key doesn't exist
+            detail_label_mode = st.checkbox("LABEL VIEW", value=False, key="detail_label_mode")
         
     artist_name = deal_row.get('Artist / Project', 
                    deal_row.get('Artist', 
                    deal_row.get('Project', 'UNKNOWN ARTIST')))
     
     # --- TAGS IN TITLE ---
-    # Check for Tags and create badge if present
-    # Check for Tags and append multiple badges
     tags_list = deal_row.get('Tags List', [])
     tags_html = ""
     for t in tags_list:
@@ -1844,35 +1844,56 @@ def show_detail(df_dash, df_act, deal_id):
     row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
     
-    # CHANGE: Replace Remaining with Profit if Recouped
-    # Use standard st.metric with custom CSS injection for color override
     if is_recouped:
         profit = cum_val - adv_val
-        
-        # Inject CSS to target the specific metric container (2nd row, 2nd column)
-        # Using nth-of-type selector for reliability in targeting
         st.markdown("""
         <style>
-        /* Target the metric value in the 2nd metric of the 2nd row of columns */
         div[data-testid="stMetric"]:nth-of-type(1) div[data-testid="stMetricValue"] {
-             /* This targets the first metric in the container it's in. 
-                Since we are inside a column, it's the only metric in that column div.
-                We need a way to target THIS specific column. 
-                Streamlit CSS injection is global.
-                Best approach: Wrap in container and use a unique class or just accept green.
-                Request said: "it can go back to being green." so standard metric is fine.
-             */
              color: #33ff00 !important;
         }
         </style>
         """, unsafe_allow_html=True)
-        
         row2_c2.metric("GENERATED PROFIT", f"${profit:,.0f}")
     else:
         row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
         
     row2_c3.metric("FORECAST START", start_date_str)
     row2_c4.metric("EST BREAKEVEN", be_date_str)
+
+    # --- B) LABEL KPI ROW (ALWAYS VISIBLE) ---
+    row3_c1, row3_c2, row3_c3, row3_c4 = st.columns(4)
+    
+    # 1. Label Share Pct
+    lbl_pct = deal_row.get('Label Share Pct', np.nan)
+    if pd.isna(lbl_pct) or lbl_pct <= 0:
+        lbl_pct_str = "N/A"
+        lbl_cum_str = "N/A"
+        lbl_run_str = "N/A"
+    else:
+        lbl_pct_str = f"{lbl_pct*100:.1f}%"
+        
+        # 2. Label Cum $
+        lbl_cum_val = cum_val * lbl_pct
+        lbl_cum_str = f"${lbl_cum_val:,.0f}"
+        
+        # 3. Label Run Rate
+        rec_vel = deal_row.get('Recent Velocity', 0)
+        lbl_run_val = rec_vel * lbl_pct
+        lbl_run_str = f"${lbl_run_val:,.0f}/mo"
+        
+    # 4. JV Status
+    # Prefer Clean computed, fallback to raw
+    is_jv_clean = deal_row.get('Is JV Clean')
+    if pd.isna(is_jv_clean):
+        raw_jv = str(deal_row.get('Is JV', '')).upper()
+        is_jv_clean = raw_jv in ['TRUE', 'YES', '1']
+    
+    jv_str = "YES" if is_jv_clean else "NO"
+    
+    row3_c1.metric("LBL SHR %", lbl_pct_str)
+    row3_c2.metric("LBL CUM $", lbl_cum_str)
+    row3_c3.metric("LBL RUN $/mo", lbl_run_str)
+    row3_c4.metric("JV YES", jv_str)
 
     st.markdown("---")
 
@@ -1932,8 +1953,6 @@ def show_detail(df_dash, df_act, deal_id):
             if tag_val:
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
-            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
-            # UPDATED LOGIC: If recouped, show suggested Re-Up with Trend Adjustment
             if is_recouped:
                 recent_vel = deal_row.get('Recent Velocity', 0)
                 lifetime_avg = deal_row.get('Lifetime Avg', 0)
@@ -1996,23 +2015,48 @@ def show_detail(df_dash, df_act, deal_id):
                 deal_act['Rolling3'] = 0
                 deal_act['Net Receipts'] = 0
             
-            # --- MONTHLY RECEIPTS LIST (EXPANDER) ---
+            # --- D) MONTHLY RECEIPTS EXPANDER (UPDATED) ---
             with st.expander("> MONTHLY RECEIPTS (CLICK TO EXPAND)", expanded=False):
                 # Header
-                h1, h2 = st.columns([1, 1])
+                h1, h2, h3 = st.columns([1, 1, 1])
                 h1.markdown("**PERIOD**")
                 h2.markdown("**NET RECEIPTS**")
+                h3.markdown("**LABEL SHARE**")
+                
+                total_net = 0.0
+                total_lbl = 0.0
+                has_share = pd.notna(lbl_pct) and lbl_pct > 0
                 
                 # List all months (Ascending order as per dataframe sort)
                 for _, r in deal_act.iterrows():
-                    rc1, rc2 = st.columns([1, 1])
+                    net_r = r['Net Receipts']
+                    total_net += net_r
+                    
+                    if has_share:
+                        lbl_r = net_r * lbl_pct
+                        total_lbl += lbl_r
+                        lbl_str = f"${lbl_r:,.2f}"
+                    else:
+                        lbl_str = "N/A"
+                        
+                    rc1, rc2, rc3 = st.columns([1, 1, 1])
                     rc1.markdown(f"<span style='color: #ffbf00;'>{r['DateStr']}</span>", unsafe_allow_html=True)
-                    rc2.markdown(f"<span style='color: #33ff00;'>${r['Net Receipts']:,.2f}</span>", unsafe_allow_html=True)
+                    rc2.markdown(f"<span style='color: #33ff00;'>${net_r:,.2f}</span>", unsafe_allow_html=True)
+                    rc3.markdown(f"<span style='color: #b026ff;'>{lbl_str}</span>", unsafe_allow_html=True)
+                
+                # Footer Total Row
+                st.markdown("<div style='border-top: 1px solid #33ff00; margin-top: 5px; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+                tc1, tc2, tc3 = st.columns([1, 1, 1])
+                tc1.markdown("**TOTAL**")
+                tc2.markdown(f"**${total_net:,.2f}**")
+                if has_share:
+                    tc3.markdown(f"**${total_lbl:,.2f}**")
+                else:
+                    tc3.markdown("**N/A**")
 
+            # --- C) CHARTS LOGIC ---
             # Forecast Data (Linear)
-            # Use 'Target Amount' from deal_row to draw forecast line correctly
-            target_amt = deal_row.get('Target Amount', adv_val) # adv_val is executed advance
-            
+            target_amt = deal_row.get('Target Amount', adv_val) 
             max_month = deal_act['MonthIndex'].max()
             forecast_data = []
             monthly_forecast = target_amt / 12.0 if target_amt > 0 else 0
@@ -2022,54 +2066,81 @@ def show_detail(df_dash, df_act, deal_id):
                     'ForecastCum': monthly_forecast * i,
                     'Type': 'Forecast'
                 })
-            
             df_forecast = pd.DataFrame(forecast_data)
             
-            c1, c2 = st.columns(2)
+            # Label Mode Logic for Charts
+            render_charts = True
+            y_col_bar = 'Net Receipts'
+            y_title_bar = 'Net Receipts'
+            y_col_line = 'CumNet'
+            y_title_line = 'Cumulative Net'
+            show_forecast_line = True
             
-            with c1:
-                bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
-                    x=alt.X('MonthLabel', sort=None, title='Period'),
-                    y=alt.Y('Net Receipts', title='Net Receipts'),
-                    tooltip=['MonthLabel', 'DateStr', 'Net Receipts']
-                ).properties(title="MONTHLY ACTUALS")
-                st.altair_chart(bar, use_container_width=True)
-                
-            with c2:
-                # Actual Line
-                line_actual = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
-                    x=alt.X('MonthLabel', sort=None, title='Period'),
-                    y=alt.Y('CumNet', title='Cumulative Net'),
-                    tooltip=['MonthLabel', 'DateStr', 'CumNet']
-                )
-                
-                # Forecast Line
-                if not df_forecast.empty:
-                    df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
-                    line_forecast = alt.Chart(df_forecast).mark_line(
-                        color='#ffbf00', 
-                        strokeDash=[5, 5]
-                    ).encode(
-                        x=alt.X('MonthLabel', sort=None),
-                        y=alt.Y('ForecastCum'),
-                        tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
-                    )
-                    final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
+            if detail_label_mode:
+                if pd.notna(lbl_pct) and lbl_pct > 0:
+                    # Create Label Columns
+                    deal_act['LabelMonthly'] = deal_act['Net Receipts'] * lbl_pct
+                    deal_act['LabelCum'] = deal_act['LabelMonthly'].cumsum()
+                    
+                    y_col_bar = 'LabelMonthly'
+                    y_title_bar = 'Label Share ($)'
+                    y_col_line = 'LabelCum'
+                    y_title_line = 'Label Cumulative ($)'
+                    show_forecast_line = False # Remove forecast in label mode
                 else:
-                    final_chart = line_actual
+                    st.info("LABEL VIEW UNAVAILABLE: Missing Label Share % for this deal.")
+                    render_charts = False
 
-                # Add Advance Line
-                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+            if render_charts:
+                c1, c2 = st.columns(2)
                 
-                st.altair_chart(final_chart + rule_adv, use_container_width=True)
+                with c1:
+                    bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
+                        x=alt.X('MonthLabel', sort=None, title='Period'),
+                        y=alt.Y(y_col_bar, title=y_title_bar),
+                        tooltip=['MonthLabel', 'DateStr', alt.Tooltip(y_col_bar, format=",.2f")]
+                    ).properties(title=f"MONTHLY {'LABEL' if detail_label_mode else 'ACTUALS'}")
+                    st.altair_chart(bar, use_container_width=True)
+                    
+                with c2:
+                    # Actual Line
+                    line_actual = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
+                        x=alt.X('MonthLabel', sort=None, title='Period'),
+                        y=alt.Y(y_col_line, title=y_title_line),
+                        tooltip=['MonthLabel', 'DateStr', alt.Tooltip(y_col_line, format=",.2f")]
+                    )
+                    
+                    # Forecast Line (Conditional)
+                    if show_forecast_line and not df_forecast.empty:
+                        df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
+                        line_forecast = alt.Chart(df_forecast).mark_line(
+                            color='#ffbf00', 
+                            strokeDash=[5, 5]
+                        ).encode(
+                            x=alt.X('MonthLabel', sort=None),
+                            y=alt.Y('ForecastCum'),
+                            tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
+                        )
+                        final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
+                    else:
+                        final_chart = line_actual
+
+                    # Add Advance Line (Always Keep)
+                    rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+                    
+                    st.altair_chart(final_chart + rule_adv, use_container_width=True)
+                    
+                    legend_html = """
+                    <div style="text-align: center; font-size: 0.8rem;">
+                        <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
+                    """
+                    if show_forecast_line:
+                        legend_html += '<span style="color: #ffbf00;">--- Forecast (12mo Pace)</span>'
+                    
+                    legend_html += "</div>"
+                    st.markdown(legend_html, unsafe_allow_html=True)
                 
-                st.markdown("""
-                <div style="text-align: center; font-size: 0.8rem;">
-                    <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
-                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
+            # --- E) TERMINAL FORECAST (UNCHANGED) ---
             st.markdown("### > TERMINAL FORECAST")
             last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
             remaining = rem_val
