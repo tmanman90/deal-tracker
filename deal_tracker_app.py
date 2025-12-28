@@ -1154,7 +1154,13 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 else: w_grade = "F"
     
     if st.session_state.label_mode:
-        kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+        # Calculate Roster Weighted DRS% (Change #1)
+        covered_df = filtered[filtered["Label Share Pct"].notna()]
+        wdrs_num = covered_df["LBL Cum"].sum()
+        wdrs_den = covered_df["Cum Receipts"].sum()
+        weighted_drs = 0.0 if wdrs_den == 0 else (wdrs_num / wdrs_den)
+
+        kpi1, kpi2, kpi3, kpi4, kpi5, kpi6, kpi7 = st.columns(7)
         
         kpi1.metric("ACTIVE DEALS", active_deals)
         kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
@@ -1162,6 +1168,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         kpi4.metric("TOTAL LBL CUM", f"${total_lbl_cum:,.0f}")
         kpi5.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
         kpi6.metric("WEIGHTED GRADE", w_grade)
+        kpi7.metric("WEIGHTED DRS%", f"{weighted_drs*100:.2f}%")
     else:
         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
         
@@ -1659,15 +1666,21 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         total_range_lbl = scanner_data['Range Label Share'].sum() # Sums non-NaNs automatically
                         
                         active_in_range = len(scanner_data[scanner_data['Range Receipts'] > 0])
-                        deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()])
+                        # deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()]) # Still computed, but not displayed as KPI
                         
                         cum_all_time = scanner_data['Cum Receipts'].sum()
                         lbl_cum_all_time = scanner_data['LBL Cum'].sum()
                         
+                        # Calculate Range Weighted DRS% (Change #2)
+                        range_covered = scanner_data[scanner_data["Label Share Pct"].notna()]
+                        range_wdrs_num = range_covered["Range Label Share"].sum()
+                        range_wdrs_den = range_covered["Range Receipts"].sum()
+                        range_weighted_drs = 0.0 if range_wdrs_den == 0 else (range_wdrs_num / range_wdrs_den)
+                        
                         k1.metric("RANGE RECEIPTS", f"${total_range_receipts:,.0f}")
                         k2.metric("RANGE LBL SHARE", f"${total_range_lbl:,.0f}")
                         k3.metric("ACTIVE (RANGE)", active_in_range)
-                        k4.metric("DEALS W/ SHARE", deals_w_share)
+                        k4.metric("WEIGHTED DRS% (RANGE)", f"{range_weighted_drs*100:.2f}%")
                         k5.metric("CUM (ALL TIME)", f"${cum_all_time:,.0f}")
                         k6.metric("LBL CUM (ALL TIME)", f"${lbl_cum_all_time:,.0f}")
                         
