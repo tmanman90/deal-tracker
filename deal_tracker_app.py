@@ -1421,309 +1421,382 @@ def show_portfolio(df_dash, df_act, current_date_override):
             except Exception as e:
                 st.error(f"Error rendering Market Pulse chart: {str(e)}")
 
-    # ---------------------------------------------------------------------
-    # RANGE SCANNER MODULE (NEW)
-    # ---------------------------------------------------------------------
-    st.markdown("### > LABEL SHARE // RANGE SCANNER")
-    
-    if df_act.empty or 'Period End Date' not in df_act.columns:
-        st.warning("Range Scanner unavailable: No Actuals data.")
-    else:
-        # 1. Build Date Options
-        valid_dates = df_act.dropna(subset=['Period End Date'])['Period End Date'].unique()
-        valid_dates = sorted(valid_dates)
+    # REMOVED: MARKET PULSE // PRINTERS NOW SECTION AS REQUESTED
         
-        if not valid_dates:
-            st.warning("Range Scanner unavailable: No valid dates found.")
-        else:
-            # Create readable labels "Oct 2025" -> Date object map
-            date_map = {pd.to_datetime(d).strftime('%b %Y'): pd.to_datetime(d) for d in valid_dates}
-            month_labels = list(date_map.keys())
-            
-            # Default: Last 3 months
-            default_end_idx = len(month_labels) - 1
-            default_start_idx = max(0, default_end_idx - 2)
-            
-            rs_c1, rs_c2 = st.columns(2)
-            with rs_c1:
-                # ADDED KEY TO PREVENT CONFLICT
-                start_month_str = st.selectbox("START MONTH", month_labels, index=default_start_idx, key="rs_start")
-            with rs_c2:
-                # ADDED KEY TO PREVENT CONFLICT
-                end_month_str = st.selectbox("END MONTH", month_labels, index=default_end_idx, key="rs_end")
-                
-            start_date = date_map[start_month_str]
-            end_date = date_map[end_month_str]
-            
-            if start_date > end_date:
-                st.error("INVALID RANGE: Start Month must be before or equal to End Month.")
-            else:
-                # 2. Filters Row
-                f_c1, f_c2, f_c3, f_c4 = st.columns(4)
-                
-                # A) Artists
-                # Use Artist / Project if available, else Artist
-                if 'Artist / Project' in df_dash.columns:
-                    art_col = 'Artist / Project'
-                else:
-                    art_col = 'Artist'
-                
-                all_artists = sorted(df_dash[art_col].dropna().unique().tolist())
-                with f_c1:
-                    # ADDED KEY TO PREVENT CONFLICT
-                    sel_artists = st.multiselect("ARTISTS", all_artists, default=[], key="rs_artists")
-                    
-                # B) Tags (from Tags List)
-                all_tags_scan = set()
-                if 'Tags List' in df_dash.columns:
-                    for t_list in df_dash['Tags List']:
-                        all_tags_scan.update(t_list)
-                all_tags_scan = sorted(list(all_tags_scan))
-                with f_c2:
-                    # ADDED KEY TO PREVENT CONFLICT
-                    sel_tags = st.multiselect("TAGS", all_tags_scan, default=[], key="rs_tags")
-                    
-                # C) JV Filter (Is JV Clean)
-                with f_c3:
-                    # ADDED KEY TO PREVENT CONFLICT
-                    jv_mode = st.selectbox("JV FILTER", ["ALL", "JV ONLY", "NON-JV ONLY"], index=0, key="rs_jv")
-                    
-                # D) View Mode
-                with f_c4:
-                    # ADDED KEY TO PREVENT CONFLICT
-                    view_mode = st.selectbox("VIEW MODE", ["SUMMARY", "DRIVERS", "FULL BREAKDOWN"], index=0, key="rs_view")
-                    
-                # 3. Define Deal Universe (df_dash filtered)
-                # Start with all valid deals
-                scanner_universe = df_dash[
-                    df_dash['did_norm'].notna() & 
-                    (df_dash['did_norm'] != "") & 
-                    (df_dash['did_norm'].str.lower() != "nan")
-                ].copy()
-                
-                # Apply Artist Filter
-                if sel_artists:
-                    scanner_universe = scanner_universe[scanner_universe[art_col].isin(sel_artists)]
-                    
-                # Apply Tag Filter (ANY match)
-                if sel_tags and 'Tags List' in scanner_universe.columns:
-                    scanner_universe = scanner_universe[scanner_universe['Tags List'].apply(lambda x: any(t in x for t in sel_tags))]
-                    
-                # Apply JV Filter
-                if jv_mode == "JV ONLY":
-                    scanner_universe = scanner_universe[scanner_universe['Is JV Clean'] == True]
-                elif jv_mode == "NON-JV ONLY":
-                    scanner_universe = scanner_universe[scanner_universe['Is JV Clean'] == False]
-                    
-                universe_ids = scanner_universe['did_norm'].unique()
-                
-                if len(universe_ids) == 0:
-                    st.warning("No deals match current filters.")
-                else:
-                    # 4. Compute Range Receipts
-                    # Filter df_act for Universe IDs AND Date Range
-                    range_act = df_act[
-                        (df_act['did_norm'].isin(universe_ids)) &
-                        (df_act['Period End Date'] >= start_date) &
-                        (df_act['Period End Date'] <= end_date)
-                    ].copy()
-                    
-                    # Group by Deal ID to get Range Receipts
-                    if not range_act.empty:
-                        range_sums = range_act.groupby('did_norm')['Net Receipts'].sum().reset_index()
-                        range_sums.rename(columns={'Net Receipts': 'Range Receipts'}, inplace=True)
-                    else:
-                        range_sums = pd.DataFrame(columns=['did_norm', 'Range Receipts'])
-                        
-                    # Merge Range Data into Universe
-                    # (Left merge to keep deals with 0 receipts in range if they are in universe)
-                    scanner_data = scanner_universe.merge(range_sums, on='did_norm', how='left')
-                    scanner_data['Range Receipts'] = scanner_data['Range Receipts'].fillna(0.0)
-                    
-                    # Compute Range Label Share
-                    # Range Label Share = Range Receipts * Label Share Pct
-                    # If Label Share Pct is NaN -> Range Label Share is NaN
-                    scanner_data['Range Label Share'] = np.where(
-                        pd.notna(scanner_data['Label Share Pct']),
-                        scanner_data['Range Receipts'] * scanner_data['Label Share Pct'],
-                        np.nan
-                    )
-                    
-                    # Ensure All-Time columns exist
-                    if 'LBL Cum' not in scanner_data.columns:
-                        scanner_data['LBL Cum'] = np.nan
-                    if 'Cum Receipts' not in scanner_data.columns:
-                        scanner_data['Cum Receipts'] = 0.0
-                        
-                    # 5. Render Outputs
-                    
-                    # --- MODE: SUMMARY ---
-                    if view_mode == "SUMMARY":
-                        k1, k2, k3, k4, k5, k6 = st.columns(6)
-                        
-                        # Aggregates
-                        total_range_receipts = scanner_data['Range Receipts'].sum()
-                        total_range_lbl = scanner_data['Range Label Share'].sum() # Sums non-NaNs automatically
-                        
-                        active_in_range = len(scanner_data[scanner_data['Range Receipts'] > 0])
-                        deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()])
-                        
-                        cum_all_time = scanner_data['Cum Receipts'].sum()
-                        lbl_cum_all_time = scanner_data['LBL Cum'].sum()
-                        
-                        k1.metric("RANGE RECEIPTS", f"${total_range_receipts:,.0f}")
-                        k2.metric("RANGE LBL SHARE", f"${total_range_lbl:,.0f}")
-                        k3.metric("ACTIVE (RANGE)", active_in_range)
-                        k4.metric("DEALS W/ SHARE", deals_w_share)
-                        k5.metric("CUM (ALL TIME)", f"${cum_all_time:,.0f}")
-                        k6.metric("LBL CUM (ALL TIME)", f"${lbl_cum_all_time:,.0f}")
-                        
-                    # --- MODE: DRIVERS ---
-                    elif view_mode == "DRIVERS":
-                        st.markdown("##### > TOP 10 DRIVERS (SORTED BY RANGE LABEL SHARE)")
-                        
-                        # Sort by Range Label Share Descending (NaNs at end)
-                        drivers = scanner_data.sort_values('Range Label Share', ascending=False, na_position='last').head(10)
-                        
-                        # Custom Table Header
-                        st.markdown("""
-                        <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00; font-size: 0.9em;">
-                            <div style="flex: 3;">ARTIST / PROJECT</div>
-                            <div style="flex: 1.5; text-align: right;">RANGE RECEIPTS</div>
-                            <div style="flex: 1.5; text-align: right;">RANGE LBL SHARE</div>
-                            <div style="flex: 1; text-align: right;">LBL %</div>
-                            <div style="flex: 0.8; text-align: center;">IS JV</div>
-                            <div style="flex: 2; padding-left: 15px;">TAGS</div>
-                            <div style="flex: 0.8;"></div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        for i, row in enumerate(drivers.to_dict('records')):
-                            name = row.get(art_col, 'Unknown')
-                            rr = row.get('Range Receipts', 0)
-                            rls = row.get('Range Label Share', np.nan)
-                            lpct = row.get('Label Share Pct', np.nan)
-                            is_jv = row.get('Is JV Clean', False)
-                            tags_l = row.get('Tags List', [])
-                            
-                            # Formatting
-                            rr_str = f"${rr:,.0f}"
-                            if pd.isna(rls):
-                                rls_str = "N/A"
-                                rls_color = "#888"
-                            else:
-                                rls_str = f"${rls:,.0f}"
-                                rls_color = "#b026ff" # Purple
-                                
-                            if pd.isna(lpct):
-                                lpct_str = "-"
-                            else:
-                                lpct_str = f"{lpct*100:.1f}%"
-                                
-                            jv_str = "YES" if is_jv else "NO"
-                            
-                            # Tags Badge String
-                            tags_html = ""
-                            for t in tags_l[:3]: # Max 3
-                                tags_html += f'<span style="border:1px solid #33ff00; border-radius:3px; padding:1px 4px; font-size:0.7em; margin-right:4px; color:#33ff00;">{t}</span>'
-                            if len(tags_l) > 3:
-                                tags_html += f'<span style="font-size:0.7em; color:#888;">+{len(tags_l)-3}</span>'
-                                
-                            # ID for open
-                            did_val = row.get('did_norm')
-                            
-                            dc1, dc2, dc3, dc4, dc5, dc6, dc7 = st.columns([3, 1.5, 1.5, 1, 0.8, 2, 0.8])
-                            
-                            with dc1: st.markdown(f"<div style='font-weight:bold; color:#e6ffff;'>{name}</div>", unsafe_allow_html=True)
-                            with dc2: st.markdown(f"<div style='text-align:right; color:#33ff00;'>{rr_str}</div>", unsafe_allow_html=True)
-                            with dc3: st.markdown(f"<div style='text-align:right; color:{rls_color}; font-weight:bold;'>{rls_str}</div>", unsafe_allow_html=True)
-                            with dc4: st.markdown(f"<div style='text-align:right;'>{lpct_str}</div>", unsafe_allow_html=True)
-                            with dc5: st.markdown(f"<div style='text-align:center;'>{jv_str}</div>", unsafe_allow_html=True)
-                            with dc6: st.markdown(f"<div>{tags_html}</div>", unsafe_allow_html=True)
-                            with dc7:
-                                if st.button("OPEN", key=f"drv_open_{i}"):
-                                    st.session_state['selected_deal_id'] = did_val
-                                    st.rerun()
-                            st.markdown("<div style='border-bottom: 1px solid #222; margin-bottom: 3px;'></div>", unsafe_allow_html=True)
+# -----------------------------------------------------------------------------
+# UI: DEAL DETAIL PAGE
+# -----------------------------------------------------------------------------
+def show_detail(df_dash, df_act, deal_id):
+    if 'Deal ID' not in df_dash.columns:
+        st.error("CONFIGURATION ERROR: 'Deal ID' column missing from sheet.")
+        return
+    
+    # Normalize ID for lookup
+    deal_id = str(deal_id).replace('\u00a0', ' ').strip()
+    
+    # Normalize DF ID column for robust matching
+    df_dash['did_norm'] = df_dash['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+    deal_subset = df_dash[df_dash['did_norm'] == deal_id]
+    
+    if deal_subset.empty:
+        st.error(f"ERROR: Deal ID {deal_id} not found in DASHBOARD.")
+        if st.button("RESET"):
+            del st.session_state['selected_deal_id']
+            st.rerun()
+        return
 
-                    # --- MODE: FULL BREAKDOWN ---
-                    elif view_mode == "FULL BREAKDOWN":
-                        st.markdown(f"##### > FULL BREAKDOWN ({len(scanner_data)} DEALS)")
-                        
-                        # Table Header
-                        st.markdown("""
-                        <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00; font-size: 0.85em;">
-                            <div style="flex: 2.5;">ARTIST / PROJECT</div>
-                            <div style="flex: 1;">DEAL ID</div>
-                            <div style="flex: 1.5;">TAGS</div>
-                            <div style="flex: 0.5; text-align: center;">JV</div>
-                            <div style="flex: 0.8; text-align: right;">ART%</div>
-                            <div style="flex: 0.8; text-align: right;">LBL%</div>
-                            <div style="flex: 1.2; text-align: right;">RNG RECPT</div>
-                            <div style="flex: 1.2; text-align: right;">RNG LBL</div>
-                            <div style="flex: 1.2; text-align: right;">CUM (ALL)</div>
-                            <div style="flex: 1.2; text-align: right;">LBL (ALL)</div>
-                            <div style="flex: 0.7;"></div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Sort by Range Label Share desc by default
-                        full_table = scanner_data.sort_values('Range Label Share', ascending=False, na_position='last')
-                        
-                        for i, row in enumerate(full_table.to_dict('records')):
-                            name = row.get(art_col, 'Unknown')
-                            did_disp = row.get('Deal ID', 'N/A')
-                            
-                            tags_l = row.get('Tags List', [])
-                            is_jv = row.get('Is JV Clean', False)
-                            
-                            asp = row.get('Artist Share Pct', 0)
-                            lsp = row.get('Label Share Pct', np.nan)
-                            
-                            rr = row.get('Range Receipts', 0)
-                            rls = row.get('Range Label Share', np.nan)
-                            
-                            cum = row.get('Cum Receipts', 0)
-                            lbl_cum = row.get('LBL Cum', np.nan)
-                            
-                            # Format
-                            tags_str = ", ".join(tags_l[:2]) + ("..." if len(tags_l)>2 else "")
-                            jv_char = "Y" if is_jv else "N"
-                            
-                            asp_str = f"{asp*100:.0f}%" if asp > 0 else "-"
-                            if pd.isna(lsp): lsp_str = "-"
-                            else: lsp_str = f"{lsp*100:.0f}%"
-                            
-                            rr_str = f"${rr:,.0f}"
-                            
-                            if pd.isna(rls): rls_str = "-"
-                            else: rls_str = f"${rls:,.0f}"
-                            
-                            cum_str = f"${cum:,.0f}"
-                            
-                            if pd.isna(lbl_cum): lbl_cum_str = "-"
-                            else: lbl_cum_str = f"${lbl_cum:,.0f}"
-                            
-                            did_val = row.get('did_norm')
-                            
-                            col_spec = [2.5, 1, 1.5, 0.5, 0.8, 0.8, 1.2, 1.2, 1.2, 1.2, 0.7]
-                            cols = st.columns(col_spec)
-                            
-                            with cols[0]: st.markdown(f"<div style='white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e6ffff;'>{name}</div>", unsafe_allow_html=True)
-                            with cols[1]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{did_disp}</div>", unsafe_allow_html=True)
-                            with cols[2]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{tags_str}</div>", unsafe_allow_html=True)
-                            with cols[3]: st.markdown(f"<div style='text-align:center;'>{jv_char}</div>", unsafe_allow_html=True)
-                            with cols[4]: st.markdown(f"<div style='text-align:right; color:#888;'>{asp_str}</div>", unsafe_allow_html=True)
-                            with cols[5]: st.markdown(f"<div style='text-align:right;'>{lsp_str}</div>", unsafe_allow_html=True)
-                            with cols[6]: st.markdown(f"<div style='text-align:right; color:#33ff00;'>{rr_str}</div>", unsafe_allow_html=True)
-                            with cols[7]: st.markdown(f"<div style='text-align:right; color:#b026ff; font-weight:bold;'>{rls_str}</div>", unsafe_allow_html=True)
-                            with cols[8]: st.markdown(f"<div style='text-align:right; color:#888;'>{cum_str}</div>", unsafe_allow_html=True)
-                            with cols[9]: st.markdown(f"<div style='text-align:right; color:#888;'>{lbl_cum_str}</div>", unsafe_allow_html=True)
-                            with cols[10]:
-                                if st.button("GO", key=f"full_open_{i}"):
-                                    st.session_state['selected_deal_id'] = did_val
-                                    st.rerun()
-                            st.markdown("<div style='border-bottom: 1px solid #111; margin-bottom: 1px;'></div>", unsafe_allow_html=True)
+    deal_row = deal_subset.iloc[0]
+    deal_act = pd.DataFrame()
+    
+    # Ensure ID matching for actuals
+    if not df_act.empty and 'Deal ID' in df_act.columns:
+        df_act['did_norm'] = df_act['Deal ID'].astype(str).str.replace('\u00a0', ' ').str.strip()
+        deal_act = df_act[df_act['did_norm'] == deal_id].copy()
+    
+    # --- TOP BAR: RETURN & SWITCHER ---
+    top_c1, top_c2 = st.columns([1, 4]) 
+    
+    with top_c1:
+        if st.button("<< RETURN TO DASHBOARD"):
+            del st.session_state['selected_deal_id']
+            st.rerun()
+
+    with top_c2:
+        # Dropdown logic
+        # Filter usable rows
+        valid_opts = df_dash[df_dash['did_norm'].notna() & (df_dash['did_norm'] != "")].copy()
+        
+        # Sort for easy finding
+        valid_opts['sort_name'] = valid_opts.apply(lambda x: str(x.get('Artist / Project', x.get('Artist', ''))).lower(), axis=1)
+        valid_opts = valid_opts.sort_values('sort_name')
+        
+        # Build labels
+        def fmt_func(did):
+            row = valid_opts[valid_opts['did_norm'] == did]
+            if not row.empty:
+                r = row.iloc[0]
+                art = r.get('Artist / Project', r.get('Artist', 'Unknown'))
+                grd = r.get('Grade', 'PENDING') if r.get('Is Eligible', False) else 'PENDING'
+                return f"{art} ({grd})"
+            return did
+            
+        # Get options list
+        opts = valid_opts['did_norm'].tolist()
+        
+        # Current index
+        try:
+            curr_idx = opts.index(deal_id)
+        except:
+            curr_idx = 0
+            
+        new_sel = st.selectbox("SWITCH ARTIST", opts, index=curr_idx, format_func=fmt_func, label_visibility="collapsed")
+        
+        if new_sel != deal_id:
+            st.session_state['selected_deal_id'] = new_sel
+            st.rerun()
+        
+    artist_name = deal_row.get('Artist / Project', 
+                   deal_row.get('Artist', 
+                   deal_row.get('Project', 'UNKNOWN ARTIST')))
+    
+    # --- TAGS IN TITLE ---
+    # Check for Tags and create badge if present
+    # Check for Tags and append multiple badges
+    tags_list = deal_row.get('Tags List', [])
+    tags_html = ""
+    for t in tags_list:
+        tags_html += f' <span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{t}</span>'
+
+    # Render Title with Tag
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html}</h1>", unsafe_allow_html=True)
+    
+    # --- HEADER STATS ---
+    row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
+    grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
+    status_val = deal_row.get('Status', '-')
+    
+    # Ensure values are clean
+    adv_val = clean_currency(deal_row.get('Executed Advance', 0))
+    cum_val = clean_currency(deal_row.get('Cum Receipts', 0))
+    rem_val = clean_currency(deal_row.get('Remaining to BE', 0))
+    
+    # Check for Recoupment
+    is_recouped = False
+    recoup_date = deal_row.get('Recoupment Date')
+    if pd.notna(recoup_date) or rem_val <= 0:
+        is_recouped = True
+
+    # NOTE: Header stats use '% to BE Clean' which now reflects Legacy logic automatically
+    pct_val = deal_row.get('% to BE Clean', 0) * 100
+    
+    start_date = parse_flexible_date(deal_row.get('Forecast Start Date'))
+    start_date_str = start_date.strftime('%b %Y').upper() if pd.notna(start_date) else '-'
+    be_date = parse_flexible_date(deal_row.get('Predicted BE Date'))
+    be_date_str = be_date.strftime('%b %Y').upper() if pd.notna(be_date) else '-'
+
+    row1_c1.metric("STATUS", status_val)
+    row1_c2.metric("PERFORMANCE GRADE", grade_display, delta_color="normal")
+    row1_c3.metric("EXECUTED ADVANCE", f"${adv_val:,.0f}")
+    row1_c4.metric("% RECOUPED", f"{pct_val:.1f}%")
+
+    row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
+    row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
+    
+    # CHANGE: Replace Remaining with Profit if Recouped
+    # Use standard st.metric with custom CSS injection for color override
+    if is_recouped:
+        profit = cum_val - adv_val
+        
+        # Inject CSS to target the specific metric container (2nd row, 2nd column)
+        # Using nth-of-type selector for reliability in targeting
+        st.markdown("""
+        <style>
+        /* Target the metric value in the 2nd metric of the 2nd row of columns */
+        div[data-testid="stMetric"]:nth-of-type(1) div[data-testid="stMetricValue"] {
+             /* This targets the first metric in the container it's in. 
+                Since we are inside a column, it's the only metric in that column div.
+                We need a way to target THIS specific column. 
+                Streamlit CSS injection is global.
+                Best approach: Wrap in container and use a unique class or just accept green.
+                Request said: "it can go back to being green." so standard metric is fine.
+             */
+             color: #33ff00 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        row2_c2.metric("GENERATED PROFIT", f"${profit:,.0f}")
+    else:
+        row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
+        
+    row2_c3.metric("FORECAST START", start_date_str)
+    row2_c4.metric("EST BREAKEVEN", be_date_str)
+
+    st.markdown("---")
+
+    # --- PACE BLOCK ---
+    st.markdown("### > PACE ANALYSIS")
+    
+    col_gauge, col_stats = st.columns([1, 2])
+    
+    with col_gauge:
+        actual_recoup = deal_row.get('% to BE Clean', 0)
+        expected_recoup = deal_row.get('Expected Recoupment', 0)
+        pace_ratio = deal_row.get('Pace Ratio', 0)
+        
+        chart_val = min(1.0, max(0.0, actual_recoup))
+        
+        if pace_ratio < 0.60:
+            bar_color = 'red' 
+        elif pace_ratio < 0.90:
+            bar_color = 'orange' 
+        else:
+            bar_color = '#33ff00' 
+            
+        gauge_df = pd.DataFrame({
+            'val': [chart_val], 
+            'label': ['Recoupment'], 
+            'color': [bar_color],
+            'Recoupment': [f"{actual_recoup*100:.1f}%"],
+            'Forecast': [f"{expected_recoup*100:.1f}%"]
+        })
+        
+        gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
+            x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
+            color=alt.Color('color', scale=None, legend=None),
+            tooltip=['label', 'Recoupment', 'Forecast']
+        ).properties(height=80, title="RECOUPMENT METER")
+        
+        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
+        st.altair_chart(gauge + rule, use_container_width=True)
+        
+    with col_stats:
+        if deal_row.get('Is Eligible', False):
+            elapsed = deal_row.get('Elapsed Months', 0)
+            recoup_pct = deal_row.get('% to BE Clean', 0) * 100
+            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
+            is_legacy = deal_row.get('Is Legacy', False)
+            tag_val = str(deal_row.get('Tags', '')).upper()
+            
+            if elapsed <= 4.5:
+                 note = "(Curved for ramp-up)"
+            else:
+                 note = "(Linear)"
+            
+            legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
+            
+            # Artist Type Line
+            artist_type_line = ""
+            if tag_val:
+                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
+            
+            # Use concise HTML for diagnostic box to avoid Markdown code block interpretation
+            # UPDATED LOGIC: If recouped, show suggested Re-Up with Trend Adjustment
+            if is_recouped:
+                recent_vel = deal_row.get('Recent Velocity', 0)
+                lifetime_avg = deal_row.get('Lifetime Avg', 0)
+                
+                # 1. Base Re-Up (based on recent velocity annualized)
+                base_reup = recent_vel * 12
+                
+                # 2. Trend Ratio
+                if lifetime_avg > 0:
+                    trend_ratio = recent_vel / lifetime_avg
+                else:
+                    trend_ratio = 1.0 # Default if no history
+                
+                # 3. Multiplier (Capped at 1.0 - Asymmetric Safety)
+                multiplier = min(1.0, trend_ratio)
+                
+                # 4. Adjusted Re-Up
+                adjusted_reup = base_reup * multiplier
+                
+                # 5. Trend Note
+                trend_note = ""
+                if multiplier < 1.0:
+                     trend_note = "<br><span style='color: #ff3333; font-size: 0.8rem;'>📉 Discounted due to negative trend.</span>"
+                
+                diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${adjusted_reup:,.0f}</span>{trend_note}<br>{artist_type_line}{legacy_flag}
+</div>"""
+            else:
+                diag_html = f"""<div class="diagnostic-box">
+<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
+</div>"""
+            st.markdown(diag_html, unsafe_allow_html=True)
+        else:
+            count_found = deal_row.get('Data Points Found', 0)
+            st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
+
+    # --- CHARTS ---
+    st.markdown("### > PERFORMANCE VISUALIZATION")
+    
+    if not deal_act.empty:
+        if 'Period End Date' in deal_act.columns:
+            deal_act = deal_act.dropna(subset=['Period End Date']).copy()
+            deal_act = deal_act.sort_values('Period End Date')
+        
+        if not deal_act.empty:
+            deal_act['MonthIndex'] = range(1, len(deal_act) + 1)
+            deal_act['MonthLabel'] = deal_act['MonthIndex'].apply(lambda x: f"M{x}")
+            deal_act['DateStr'] = deal_act['Period End Date'].dt.strftime('%b %Y')
+            
+            if 'Net Receipts' in deal_act.columns:
+                deal_act['CumNet'] = deal_act['Net Receipts'].cumsum()
+                deal_act['Rolling3'] = deal_act['Net Receipts'].rolling(window=3).mean()
+            else:
+                deal_act['CumNet'] = 0
+                deal_act['Rolling3'] = 0
+                deal_act['Net Receipts'] = 0
+            
+            # --- MONTHLY RECEIPTS LIST (EXPANDER) ---
+            with st.expander("> MONTHLY RECEIPTS (CLICK TO EXPAND)", expanded=False):
+                # Header
+                h1, h2 = st.columns([1, 1])
+                h1.markdown("**PERIOD**")
+                h2.markdown("**NET RECEIPTS**")
+                
+                # List all months (Ascending order as per dataframe sort)
+                for _, r in deal_act.iterrows():
+                    rc1, rc2 = st.columns([1, 1])
+                    rc1.markdown(f"<span style='color: #ffbf00;'>{r['DateStr']}</span>", unsafe_allow_html=True)
+                    rc2.markdown(f"<span style='color: #33ff00;'>${r['Net Receipts']:,.2f}</span>", unsafe_allow_html=True)
+
+            # Forecast Data (Linear)
+            # Use 'Target Amount' from deal_row to draw forecast line correctly
+            target_amt = deal_row.get('Target Amount', adv_val) # adv_val is executed advance
+            
+            max_month = deal_act['MonthIndex'].max()
+            forecast_data = []
+            monthly_forecast = target_amt / 12.0 if target_amt > 0 else 0
+            for i in range(1, max_month + 1):
+                forecast_data.append({
+                    'MonthIndex': i,
+                    'ForecastCum': monthly_forecast * i,
+                    'Type': 'Forecast'
+                })
+            
+            df_forecast = pd.DataFrame(forecast_data)
+            
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                bar = alt.Chart(deal_act).mark_bar(color='#b026ff').encode(
+                    x=alt.X('MonthLabel', sort=None, title='Period'),
+                    y=alt.Y('Net Receipts', title='Net Receipts'),
+                    tooltip=['MonthLabel', 'DateStr', 'Net Receipts']
+                ).properties(title="MONTHLY ACTUALS")
+                st.altair_chart(bar, use_container_width=True)
+                
+            with c2:
+                # Actual Line
+                line_actual = alt.Chart(deal_act).mark_line(color='#33ff00', point=True).encode(
+                    x=alt.X('MonthLabel', sort=None, title='Period'),
+                    y=alt.Y('CumNet', title='Cumulative Net'),
+                    tooltip=['MonthLabel', 'DateStr', 'CumNet']
+                )
+                
+                # Forecast Line
+                if not df_forecast.empty:
+                    df_forecast['MonthLabel'] = df_forecast['MonthIndex'].apply(lambda x: f"M{x}")
+                    line_forecast = alt.Chart(df_forecast).mark_line(
+                        color='#ffbf00', 
+                        strokeDash=[5, 5]
+                    ).encode(
+                        x=alt.X('MonthLabel', sort=None),
+                        y=alt.Y('ForecastCum'),
+                        tooltip=[alt.Tooltip('ForecastCum', title='Forecast Cumulative')]
+                    )
+                    final_chart = (line_actual + line_forecast).resolve_scale(y='shared')
+                else:
+                    final_chart = line_actual
+
+                # Add Advance Line
+                rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+                
+                st.altair_chart(final_chart + rule_adv, use_container_width=True)
+                
+                st.markdown("""
+                <div style="text-align: center; font-size: 0.8rem;">
+                    <span style="color: #33ff00;">● Actual</span> &nbsp;&nbsp; 
+                    <span style="color: #ffbf00;">--- Forecast (12mo Pace)</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("### > TERMINAL FORECAST")
+            last_rolling = deal_act['Rolling3'].iloc[-1] if len(deal_act) > 0 else 0
+            remaining = rem_val
+            
+            # --- NEW RECOUPED LOGIC ---
+            if is_recouped:
+                elapsed = deal_row.get('Elapsed Months', 0)
+                
+                st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
+                
+                # Removed duplicate Re-Up display here as requested
+                
+            elif last_rolling > 0:
+                months_to_go = remaining / last_rolling
+                
+                # NEW LOGIC: Calculate Total Time to Recoup
+                elapsed = deal_row.get('Elapsed Months', 0)
+                total_months = elapsed + months_to_go
+                
+                st.markdown(f"""
+                BASED ON LAST 3 MONTHS AVG (${last_rolling:,.0f}/mo):
+                ESTIMATED TOTAL TIME TO RECOUP: **{total_months:.1f} MONTHS**
+                """)
+            else:
+                st.error("VELOCITY ERROR: RECIEPTS TOO LOW TO PROJECT RECOUPMENT.")
+        else:
+             st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
+    else:
+        st.warning("NO ACTUALS DATA FOUND ON SERVER.")
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
