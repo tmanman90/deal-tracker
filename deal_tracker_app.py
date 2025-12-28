@@ -1031,7 +1031,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         status_filter = st.multiselect("STATUS", sorted_status, default=sorted_status)
         
     with col3:
-        st.write("")  # spacer only
+        st.empty() # Changed to empty just in case st.write("") is doing something weird, though unlikely.
         
     with col4:
         sort_opt = st.selectbox("SORT BY", ["Grade", "Remaining to BE", "% to BE", "Cum Receipts", "Delta Months"], index=0)
@@ -1052,6 +1052,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         label_mode_val = st.checkbox("LABEL MODE", value=st.session_state.label_mode)
         st.session_state.label_mode = label_mode_val
         
+        # Ensure eligible_only is clearly defined here
         eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
     
     # Filter Logic
