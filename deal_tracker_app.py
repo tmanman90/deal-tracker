@@ -1154,7 +1154,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 else: w_grade = "F"
     
     if st.session_state.label_mode:
-        # Calculate Roster Weighted DRS% (Change #1)
+        # Calculate Roster Weighted DRS%
         covered_df = filtered[filtered["Label Share Pct"].notna()]
         wdrs_num = covered_df["LBL Cum"].sum()
         wdrs_den = covered_df["Cum Receipts"].sum()
@@ -1666,12 +1666,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
                         total_range_lbl = scanner_data['Range Label Share'].sum() # Sums non-NaNs automatically
                         
                         active_in_range = len(scanner_data[scanner_data['Range Receipts'] > 0])
-                        # deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()]) # Still computed, but not displayed as KPI
+                        deals_w_share = len(scanner_data[scanner_data['Label Share Pct'].notna()])
                         
                         cum_all_time = scanner_data['Cum Receipts'].sum()
                         lbl_cum_all_time = scanner_data['LBL Cum'].sum()
-                        
-                        # Calculate Range Weighted DRS% (Change #2)
+
+                        # Calculate Range Weighted DRS%
                         range_covered = scanner_data[scanner_data["Label Share Pct"].notna()]
                         range_wdrs_num = range_covered["Range Label Share"].sum()
                         range_wdrs_den = range_covered["Range Receipts"].sum()
