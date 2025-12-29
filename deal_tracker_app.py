@@ -1166,9 +1166,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
         kpi2.metric("TOTAL ADVANCES", f"${total_adv:,.0f}")
         kpi3.metric("TOTAL CUM RECEIPTS", f"${total_rec:,.0f}")
         kpi4.metric("TOTAL LBL CUM", f"${total_lbl_cum:,.0f}")
-        kpi5.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
-        kpi6.metric("WEIGHTED GRADE", w_grade)
-        kpi7.metric("WEIGHTED DRS%", f"{weighted_drs*100:.2f}%")
+        kpi5.metric("WEIGHTED DRS%", f"{weighted_drs*100:.2f}%")
+        kpi6.metric("WEIGHTED RECOUPMENT", f"{w_pct:.1f}%")
+        kpi7.metric("WEIGHTED GRADE", w_grade)
     else:
         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
         
