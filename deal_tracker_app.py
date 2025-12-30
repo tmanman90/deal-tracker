@@ -373,7 +373,7 @@ def parse_flexible_date(date_str):
     return pd.to_datetime(date_str, errors='coerce')
 
 def render_early_reup_pill(tier):
-    """Returns HTML string for the Early Re-Up pill."""
+    """Returns HTML string for the Early Re-Up pill (Dashboard Version)."""
     if not tier:
         return ""
     if tier == "GREENLIGHT":
@@ -383,7 +383,7 @@ def render_early_reup_pill(tier):
     return ""
 
 def render_eru_pill(tier: str) -> str:
-    """Header pill for the Early Re-Up Window module (detail page)."""
+    """Header pill for the Early Re-Up Window module (Detail Version)."""
     t = (tier or "").strip().upper()
     if t == "GREENLIGHT":
         return '<span class="eru-pill eru-pill-green">RE-UP WINDOW</span>'
