@@ -382,6 +382,15 @@ def render_early_reup_pill(tier):
         return '<span class="pill pill-amber">WATCHLIST</span>'
     return ""
 
+def render_eru_pill(tier: str) -> str:
+    """Header pill for the Early Re-Up Window module (detail page)."""
+    t = (tier or "").strip().upper()
+    if t == "GREENLIGHT":
+        return '<span class="eru-pill eru-pill-green">RE-UP WINDOW</span>'
+    if t == "WATCHLIST":
+        return '<span class="eru-pill eru-pill-amber">WATCHLIST</span>'
+    return ""
+
 def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
     """
     Calculates Grade and Pace based on Benchmark.
