@@ -2285,9 +2285,9 @@ def show_detail(df_dash, df_act, deal_id):
             m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
             
             er_html = f"""<div class="diagnostic-box">
-            <div style="overflow: hidden; margin-bottom: 5px; border-bottom: 1px solid #33ff00; padding-bottom: 3px;">
-                <div style="float: right;">{pill_render}</div>
-                <div style="font-weight: bold; color: #e6ffff; display: inline-block;">EARLY RE-UP WINDOW</div>
+            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
+                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
+                <div style="position: absolute; right: 0; top: -2px;">{pill_render}</div>
             </div>
             <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
             <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
