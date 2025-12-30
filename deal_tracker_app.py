@@ -6,7 +6,6 @@ from google.oauth2.service_account import Credentials
 import numpy as np
 from datetime import datetime, date
 import re
-import math
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -130,41 +129,14 @@ st.markdown("""
         font-size: 1.1rem; /* Larger font */
         line-height: 1.6;
         box-shadow: 0 0 5px #33ff00aa;
-        height: 100%; /* Fill column height if possible */
     }
     .diagnostic-label {
         color: #ffbf00; /* Amber for labels */
         font-weight: bold;
-        font-size: 0.95rem;
     }
     .diagnostic-value {
         color: #33ff00; /* Neon green for values */
         font-weight: bold;
-    }
-
-    /* PILL BADGES */
-    .pill {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: bold;
-        text-transform: uppercase;
-        margin-left: 8px;
-        vertical-align: middle;
-        letter-spacing: 0.5px;
-    }
-    .pill-green {
-        background-color: #33ff00;
-        color: #000;
-        border: 1px solid #33ff00;
-        box-shadow: 0 0 8px rgba(51, 255, 0, 0.6);
-    }
-    .pill-amber {
-        background-color: #ffbf00;
-        color: #000;
-        border: 1px solid #ffbf00;
-        box-shadow: 0 0 8px rgba(255, 191, 0, 0.6);
     }
 
     /* TICKER TAPE */
@@ -339,16 +311,6 @@ def parse_flexible_date(date_str):
             
     # Last resort: let pandas guess
     return pd.to_datetime(date_str, errors='coerce')
-
-def render_early_reup_pill(tier):
-    """Returns HTML string for the Early Re-Up pill."""
-    if not tier:
-        return ""
-    if tier == "GREENLIGHT":
-        return '<span class="pill pill-green">RE-UP WINDOW</span>'
-    elif tier == "WATCHLIST":
-        return '<span class="pill pill-amber">WATCHLIST</span>'
-    return ""
 
 def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
     """
@@ -1006,99 +968,6 @@ def process_data(df_dash, df_act, df_deals):
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
     df_dash['% to BE Clean'] = df_dash.apply(lambda r: (r['Cum Receipts']/r['Target Amount']) if r['Target Amount'] > 0 else 0, axis=1)
-
-    # ------------------------------------------------------------------------
-    # EARLY RE-UP TIER COMPUTATION (NEW)
-    # ------------------------------------------------------------------------
-    tier_list = []
-    speed_ratio_list = []
-    accel_ratio_list = []
-    months_to_be_list = []
-    
-    for _, row in df_dash.iterrows():
-        # Get Basics
-        exec_adv = row.get('Executed Advance', 0)
-        cum = row.get('Cum Receipts', 0)
-        
-        # Recouped means Cum >= Executed Advance
-        is_recouped = (cum >= exec_adv)
-        
-        # Default Tier Values
-        tier = ""
-        speed_ratio = 0.0
-        accel_ratio = 0.0
-        months_to_be_today = 999.0
-        
-        # Only analyze if UNRECOUPED
-        if not is_recouped:
-            # Gather metrics
-            rem_to_be = max(exec_adv - cum, 0)
-            
-            # Target Months (LBM)
-            try:
-                lbm = row.get('Label Breakeven Months', 12)
-                tgt_months = float(str(lbm).replace(',','').strip())
-                if tgt_months <= 0: tgt_months = 12.0
-            except:
-                tgt_months = 12.0
-                
-            # Run Rate (Velocity)
-            run_rate = row.get('Recent Velocity', 0)
-            
-            # Months to BE from Today
-            if run_rate > 0:
-                months_to_be_today = rem_to_be / run_rate
-            else:
-                months_to_be_today = 999.0
-                
-            # Projected Total Months (from Pace Metrics)
-            proj_total = row.get('ProjectedRecoupMonths', 999.0)
-            if proj_total <= 0: proj_total = 999.0 # Safety
-            
-            # Speed Ratio (Target / Projected)
-            speed_ratio = tgt_months / proj_total
-            
-            # Acceleration Ratio (Recent / Lifetime)
-            lifetime = row.get('Lifetime Avg', 0)
-            if lifetime > 0:
-                accel_ratio = run_rate / lifetime
-            else:
-                accel_ratio = 0.0
-                
-            # Flags
-            is_printer = row.get('IsPrinterEligible', False)
-            trickle = row.get('TrickleDetected', False)
-            p_score = row.get('PrinterScore', 0)
-            grade = row.get('Grade', 'N/A')
-            
-            # Tier Logic
-            # GREENLIGHT
-            if (is_printer and not trickle and 
-                p_score >= 1.20 and 
-                grade in ["A", "A+", "A++"] and
-                speed_ratio >= 1.35 and 
-                months_to_be_today <= 6 and 
-                accel_ratio >= 1.25):
-                tier = "GREENLIGHT"
-                
-            # WATCHLIST (Else If)
-            elif (is_printer and not trickle and 
-                  p_score >= 1.10 and 
-                  grade in ["B+", "A", "A+", "A++"] and
-                  speed_ratio >= 1.15 and 
-                  months_to_be_today <= 9 and 
-                  accel_ratio >= 1.10):
-                tier = "WATCHLIST"
-                
-        tier_list.append(tier)
-        speed_ratio_list.append(speed_ratio)
-        accel_ratio_list.append(accel_ratio)
-        months_to_be_list.append(months_to_be_today)
-
-    df_dash['Early Reup Tier'] = tier_list
-    df_dash['Speed Ratio'] = speed_ratio_list
-    df_dash['Accel Ratio'] = accel_ratio_list
-    df_dash['Months to BE Today'] = months_to_be_list
     
     return df_dash, df_act, current_date_override
 
@@ -1345,10 +1214,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
         did_disp = row.get('Deal ID', 'N/A')
         status = row.get('Status', '-')
         
-        # EARLY RE-UP PILL (DASHBOARD)
-        reup_tier = row.get('Early Reup Tier', '')
-        pill_html = render_early_reup_pill(reup_tier)
-        
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
         
         # Updated grade color logic
@@ -1379,7 +1244,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3, 1, 1, 1, 1.2, 1, 1.5, 1])
         
         with c1:
-            st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}{pill_html}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}</div>", unsafe_allow_html=True)
         with c2:
             st.markdown(f"<div style='padding-top: 5px; color: #888;'>{did_disp}</div>", unsafe_allow_html=True)
         with c3:
@@ -2050,12 +1915,8 @@ def show_detail(df_dash, df_act, deal_id):
     for t in tags_list:
         tags_html += f' <span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{t}</span>'
 
-    # --- EARLY RE-UP PILL IN TITLE ---
-    reup_tier = deal_row.get('Early Reup Tier', '')
-    pill_html = render_early_reup_pill(reup_tier)
-
     # Render Title with Tag
-    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html} {pill_html}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
@@ -2145,8 +2006,7 @@ def show_detail(df_dash, df_act, deal_id):
     # --- PACE BLOCK ---
     st.markdown("### > PACE ANALYSIS")
     
-    # UPDATED LAYOUT: 3 Equal Columns [1, 1, 1] for Meter, Pace Stats, Early Re-Up Stats
-    col_gauge, col_stats, col_early_reup = st.columns([1, 1, 1])
+    col_gauge, col_stats = st.columns([1, 2])
     
     with col_gauge:
         actual_recoup = deal_row.get('% to BE Clean', 0)
@@ -2201,6 +2061,7 @@ def show_detail(df_dash, df_act, deal_id):
             
             if is_recouped:
                 # NEW RE-UP LOGIC: Range-based
+                import math
                 def floor_to(x, base=500):
                      return base * math.floor(x / base)
 
@@ -2236,48 +2097,6 @@ def show_detail(df_dash, df_act, deal_id):
         else:
             count_found = deal_row.get('Data Points Found', 0)
             st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
-
-    with col_early_reup:
-        # NEW EARLY RE-UP WINDOW MODULE (Only if Not Recouped? No, render for all but logic blanks if recouped)
-        # Actually logic ensures it's blank if recouped.
-        
-        t_tier = deal_row.get('Early Reup Tier', '')
-        t_proj = deal_row.get('ProjectedRecoupMonths', 0)
-        
-        # Target (LBM)
-        try:
-             lbm = deal_row.get('Label Breakeven Months', 12)
-             t_lbm = float(str(lbm).replace(',','').strip())
-             if t_lbm <= 0: t_lbm = 12.0
-        except:
-             t_lbm = 12.0
-             
-        t_m_to_be = deal_row.get('Months to BE Today', 999.0)
-        t_run = deal_row.get('Recent Velocity', 0)
-        t_pscore = deal_row.get('PrinterScore', 0)
-        t_accel = deal_row.get('Accel Ratio', 0)
-        
-        # Format Tier Display
-        display_tier = t_tier if t_tier else "NONE"
-        pill_render = render_early_reup_pill(t_tier)
-        
-        # Handle large numbers for display
-        proj_str = f"{t_proj:.1f} mo" if t_proj < 900 else "> 5yr"
-        m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
-        
-        er_html = f"""<div class="diagnostic-box">
-        <div style="margin-bottom: 5px; font-weight: bold; color: #e6ffff; border-bottom: 1px solid #33ff00; padding-bottom: 3px;">EARLY RE-UP WINDOW</div>
-        {pill_render}<br>
-        <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
-        <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
-        <span class="diagnostic-label">TARGET (LBM):</span> <span class="diagnostic-value">{t_lbm:.0f} mo</span><br>
-        <span class="diagnostic-label">MONTHS TO BE (TODAY):</span> <span class="diagnostic-value">{m_to_be_str}</span><br>
-        <span class="diagnostic-label">RUN RATE:</span> <span class="diagnostic-value">${t_run:,.0f}/mo</span><br>
-        <span class="diagnostic-label">PRINTER SCORE:</span> <span class="diagnostic-value">{t_pscore:.2f}</span><br>
-        <span class="diagnostic-label">ACCELERATION:</span> <span class="diagnostic-value">{t_accel:.2f}x</span>
-        </div>"""
-        
-        st.markdown(er_html, unsafe_allow_html=True)
 
     # --- CHARTS ---
     st.markdown("### > PERFORMANCE VISUALIZATION")
