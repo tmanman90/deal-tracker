@@ -2060,33 +2060,31 @@ def show_detail(df_dash, df_act, deal_id):
                 artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
             
             if is_recouped:
-                recent_vel = deal_row.get('Recent Velocity', 0)
-                lifetime_avg = deal_row.get('Lifetime Avg', 0)
+                # NEW RE-UP LOGIC: Range-based
+                import math
+                def floor_to(x, base=500):
+                     return base * math.floor(x / base)
+
+                rec_vel = deal_row.get('Recent Velocity', 0)
                 
-                # 1. Base Re-Up (based on recent velocity annualized)
-                base_reup = recent_vel * 12
+                # 1. High End: Annualized Run Rate (No trend adjustment)
+                high_reup_raw = max(0, rec_vel) * 12
                 
-                # 2. Trend Ratio
-                if lifetime_avg > 0:
-                    trend_ratio = recent_vel / lifetime_avg
-                else:
-                    trend_ratio = 1.0 # Default if no history
+                # 2. Low End: Leverage Discount
+                LEVERAGE_DISCOUNT = 0.70
+                low_reup_raw = high_reup_raw * LEVERAGE_DISCOUNT
                 
-                # 3. Multiplier (Capped at 1.0 - Asymmetric Safety)
-                multiplier = min(1.0, trend_ratio)
+                # 3. Rounding
+                high_reup = floor_to(high_reup_raw, 500)
+                low_reup = floor_to(low_reup_raw, 500)
                 
-                # 4. Adjusted Re-Up
-                adjusted_reup = base_reup * multiplier
-                
-                # 5. Trend Note
-                trend_note = ""
-                if multiplier < 1.0:
-                     trend_note = "<br><span style='color: #ff3333; font-size: 0.8rem;'>📉 Discounted due to negative trend.</span>"
+                # 4. Display String
+                reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
                 
                 diag_html = f"""<div class="diagnostic-box">
 <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
 <span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">SUGGESTED RE-UP:</span> <span class="diagnostic-value" style="color: #ffd700;">${adjusted_reup:,.0f}</span>{trend_note}<br>{artist_type_line}{legacy_flag}
+<span class="diagnostic-label">SUGGESTED RE-UP RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>{artist_type_line}{legacy_flag}
 </div>"""
             else:
                 diag_html = f"""<div class="diagnostic-box">
