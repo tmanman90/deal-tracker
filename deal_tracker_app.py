@@ -1162,7 +1162,13 @@ def process_data(df_dash, df_act, df_deals):
         if row.get('IsNoAdvance', False):
             # Default values for No Adv
             speed_ratio_list.append(0.0)
-            accel_ratio_list.append(0.0)
+            # Compute accel_ratio for No Advance (used in display)
+            lifetime = row.get('Lifetime Avg', 0)
+            if lifetime > 0:
+                accel_ratio_list.append(run_rate / lifetime)
+            else:
+                accel_ratio_list.append(0.0)
+                
             months_to_be_list.append(0.0)
             
             # Tier Logic for No Advance
@@ -2106,6 +2112,85 @@ def show_portfolio(df_dash, df_act, current_date_override):
                                     st.rerun()
                             st.markdown("<div style='border-bottom: 1px solid #222; margin-bottom: 3px;'></div>", unsafe_allow_html=True)
 
+                    # --- MODE: FULL BREAKDOWN ---
+                    elif view_mode == "FULL BREAKDOWN":
+                        st.markdown(f"##### > FULL BREAKDOWN ({len(scanner_data)} DEALS)")
+                        
+                        # Table Header
+                        st.markdown("""
+                        <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00; font-size: 0.85em;">
+                            <div style="flex: 2.5;">ARTIST / PROJECT</div>
+                            <div style="flex: 1;">DEAL ID</div>
+                            <div style="flex: 1.5;">TAGS</div>
+                            <div style="flex: 0.5; text-align: center;">JV</div>
+                            <div style="flex: 0.8; text-align: right;">ART%</div>
+                            <div style="flex: 0.8; text-align: right;">LBL%</div>
+                            <div style="flex: 1.2; text-align: right;">RNG RECPT</div>
+                            <div style="flex: 1.2; text-align: right;">RNG LBL</div>
+                            <div style="flex: 1.2; text-align: right;">CUM (ALL)</div>
+                            <div style="flex: 1.2; text-align: right;">LBL (ALL)</div>
+                            <div style="flex: 0.7;"></div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Sort by Range Label Share desc by default
+                        full_table = scanner_data.sort_values('Range Label Share', ascending=False, na_position='last')
+                        
+                        for i, row in enumerate(full_table.to_dict('records')):
+                            name = row.get(art_col, 'Unknown')
+                            did_disp = row.get('Deal ID', 'N/A')
+                            
+                            tags_l = row.get('Tags List', [])
+                            is_jv = row.get('Is JV Clean', False)
+                            
+                            asp = row.get('Artist Share Pct', 0)
+                            lsp = row.get('Label Share Pct', np.nan)
+                            
+                            rr = row.get('Range Receipts', 0)
+                            rls = row.get('Range Label Share', np.nan)
+                            
+                            cum = row.get('Cum Receipts', 0)
+                            lbl_cum = row.get('LBL Cum', np.nan)
+                            
+                            # Format
+                            tags_str = ", ".join(tags_l[:2]) + ("..." if len(tags_l)>2 else "")
+                            jv_char = "Y" if is_jv else "N"
+                            
+                            asp_str = f"{asp*100:.0f}%" if asp > 0 else "-"
+                            if pd.isna(lsp): lsp_str = "-"
+                            else: lsp_str = f"{lsp*100:.0f}%"
+                            
+                            rr_str = f"${rr:,.0f}"
+                            
+                            if pd.isna(rls): rls_str = "-"
+                            else: rls_str = f"${rls:,.0f}"
+                            
+                            cum_str = f"${cum:,.0f}"
+                            
+                            if pd.isna(lbl_cum): lbl_cum_str = "-"
+                            else: lbl_cum_str = f"${lbl_cum:,.0f}"
+                            
+                            did_val = row.get('did_norm')
+                            
+                            col_spec = [2.5, 1, 1.5, 0.5, 0.8, 0.8, 1.2, 1.2, 1.2, 1.2, 0.7]
+                            cols = st.columns(col_spec)
+                            
+                            with cols[0]: st.markdown(f"<div style='white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#e6ffff;'>{name}</div>", unsafe_allow_html=True)
+                            with cols[1]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{did_disp}</div>", unsafe_allow_html=True)
+                            with cols[2]: st.markdown(f"<div style='font-size:0.8em; color:#888;'>{tags_str}</div>", unsafe_allow_html=True)
+                            with cols[3]: st.markdown(f"<div style='text-align:center;'>{jv_char}</div>", unsafe_allow_html=True)
+                            with cols[4]: st.markdown(f"<div style='text-align:right; color:#888;'>{asp_str}</div>", unsafe_allow_html=True)
+                            with cols[5]: st.markdown(f"<div style='text-align:right;'>{lsp_str}</div>", unsafe_allow_html=True)
+                            with cols[6]: st.markdown(f"<div style='text-align:right; color:#33ff00;'>{rr_str}</div>", unsafe_allow_html=True)
+                            with cols[7]: st.markdown(f"<div style='text-align:right; color:#b026ff; font-weight:bold;'>{rls_str}</div>", unsafe_allow_html=True)
+                            with cols[8]: st.markdown(f"<div style='text-align:right; color:#888;'>{cum_str}</div>", unsafe_allow_html=True)
+                            with cols[9]: st.markdown(f"<div style='text-align:right; color:#888;'>{lbl_cum_str}</div>", unsafe_allow_html=True)
+                            with cols[10]:
+                                if st.button("GO", key=f"full_open_{i}"):
+                                    st.session_state['selected_deal_id'] = did_val
+                                    st.rerun()
+                            st.markdown("<div style='border-bottom: 1px solid #111; margin-bottom: 1px;'></div>", unsafe_allow_html=True)
+
 # -----------------------------------------------------------------------------
 # UI: DEAL DETAIL PAGE
 # -----------------------------------------------------------------------------
@@ -2316,11 +2401,14 @@ def show_detail(df_dash, df_act, deal_id):
         rr_val = deal_row.get('Recent Velocity', 0)
         tr3 = deal_row.get('TR3', 0)
         pr3 = deal_row.get('PR3', 0)
-        momentum = deal_row.get('Momentum', 'N/A')
         months_count = deal_row.get('MonthsCount', 0)
-        
+        momentum = deal_row.get('Momentum', 'N/A')
+        printer_score = deal_row.get('PrinterScore', 0)
+        accel_ratio = deal_row.get('Accel Ratio', 0)
+        lifetime_avg = deal_row.get('Lifetime Avg', 0)
+
         # Growth
-        growth_denom = max(pr3, 300.0)
+        growth_denom = max(pr3, 300)
         growth_pct = (tr3 - pr3) / growth_denom if growth_denom > 0 else 0
         
         # Suggested Re-Up Range
@@ -2333,54 +2421,40 @@ def show_detail(df_dash, df_act, deal_id):
         low_reup = floor_to(high_reup * 0.7, 500)
         reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
         
-        # Re-up & acceleration metrics
+        # Tier
         na_tier = deal_row.get('Early Reup Tier', 'N/A')
-        if not na_tier: na_tier = "N/A"
-        # Only render pill if tier is present and not N/A, else standard text or N/A
-        pill_render_na = render_early_reup_pill(na_tier if na_tier != "N/A" else "")
+        pill_render_na = render_early_reup_pill(na_tier)
         
-        printer_score = deal_row.get('PrinterScore', 0.0)
-        accel_ratio = deal_row.get('Accel Ratio', 0.0)
-        lifetime_avg = deal_row.get('Lifetime Avg', 0.0)
-        
-        # Format Accel
+        # Acceleration String
+        accel_str = "N/A"
         if lifetime_avg > 0:
             accel_str = f"{accel_ratio:.2f}x"
-        else:
-            accel_str = "N/A"
-        
-        # Render Two-Column Layout: Left (Health), Right (Re-Up)
-        c_health, c_reup = st.columns([1, 1])
-        
-        with c_health:
-            # Color for growth
-            g_sign = "+" if growth_pct >= 0 else ""
-            g_color = "#33ff00" if growth_pct >= 0 else "#ff3333"
-            
-            # Momentum Color
-            if momentum == "HEATING": mom_color = "#33ff00"
-            elif momentum == "COOLING": mom_color = "#ff3333"
-            elif momentum == "STEADY": mom_color = "#33ccff"
-            elif momentum == "NEW": mom_color = "#ffbf00"
-            else: mom_color = "#888"
 
+        # Render Two-Column Layout (Module B Left, Module A Right)
+        c_health, c_reup = st.columns(2)
+        
+        # MODULE B: DEAL HEALTH (LEFT)
+        with c_health:
             health_html = f"""<div class="diagnostic-box" style="height: 100%;">
-            <div style="border-bottom: 1px solid #33ff00; margin-bottom: 8px; padding-bottom: 3px; color: #e6ffff; font-weight: bold;">DEAL HEALTH</div>
+            <div style="border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
+                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">DEAL HEALTH</span>
+            </div>
             <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{months_count} months</span><br>
-            <span class="diagnostic-label">MOMENTUM:</span> <span class="diagnostic-value" style="color: {mom_color};">{momentum}</span><br>
+            <span class="diagnostic-label">MOMENTUM:</span> <span class="diagnostic-value">{momentum}</span><br>
             <span class="diagnostic-label">TR3 (Recent 3mo):</span> <span class="diagnostic-value">${tr3:,.0f}</span><br>
             <span class="diagnostic-label">PR3 (Prior 3mo):</span> <span class="diagnostic-value">${pr3:,.0f}</span><br>
-            <span class="diagnostic-label">GROWTH:</span> <span class="diagnostic-value" style="color: {g_color};">{g_sign}{growth_pct*100:.1f}%</span>
-            <div style="margin-top: 15px; font-size: 0.75rem; color: #666; border-top: 1px solid #333; padding-top: 5px;">
-            TR3 = Trailing 3mo Total | PR3 = Prior 3mo Total
+            <span class="diagnostic-label">GROWTH:</span> <span class="diagnostic-value" style="color: {'#33ff00' if growth_pct >= 0 else '#ff3333'};">{growth_pct*100:+.1f}%</span>
+            <div style="margin-top: 8px; font-size: 0.75rem; color: #888; border-top: 1px solid #333; padding-top: 4px;">
+                TR3 = Trailing 3mo Total | PR3 = Prior 3mo Total
             </div>
             </div>"""
             st.markdown(health_html, unsafe_allow_html=True)
             
+        # MODULE A: EARLY RE-UP WINDOW (RIGHT)
         with c_reup:
             reup_html = f"""<div class="diagnostic-box" style="height: 100%;">
-            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 8px; padding-bottom: 3px;">
-                <span style="font-weight: bold; color: #e6ffff;">EARLY RE-UP WINDOW</span>
+            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
+                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
                 <div style="position: absolute; right: 0; top: -2px;">{pill_render_na}</div>
             </div>
             <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{na_tier}</span><br>
@@ -2389,7 +2463,7 @@ def show_detail(df_dash, df_act, deal_id):
             <span class="diagnostic-label">ACCELERATION:</span> <span class="diagnostic-value">{accel_str}</span>
             </div>"""
             st.markdown(reup_html, unsafe_allow_html=True)
-        
+            
     else:
         # Check for tier to decide layout
         t_tier = deal_row.get('Early Reup Tier', '')
@@ -2696,43 +2770,57 @@ def show_detail(df_dash, df_act, deal_id):
             
             # --- NEW RECOUPED LOGIC ---
             if is_no_adv:
-                # Get metrics again if needed or reuse variables
-                rr = deal_row.get('Recent Velocity', 0)
-                tr3 = deal_row.get('TR3', 0)
-                pr3 = deal_row.get('PR3', 0)
-                months_count = deal_row.get('MonthsCount', 0)
-                momentum = deal_row.get('Momentum', 'N/A')
+                # No Advance Forecasting Logic
+                na_mom = deal_row.get('Momentum', 'N/A')
+                na_rr = deal_row.get('Recent Velocity', 0)
+                na_months = deal_row.get('MonthsCount', 0)
+                na_pr3 = deal_row.get('PR3', 0)
+                na_tr3 = deal_row.get('TR3', 0)
                 
-                # Recalculate growth ratio for local usage to be safe
-                denom = max(pr3, 300.0)
-                growth_ratio = (tr3 - pr3) / denom
-                
-                if rr <= 0:
-                     st.markdown("**NO ADVANCE FORECAST: INSUFFICIENT DATA**")
+                # Check sufficiency
+                if na_rr <= 0 or na_months < 1:
+                    st.markdown("**NO ADVANCE FORECAST: INSUFFICIENT DATA**")
                 else:
-                     is_flat = True
-                     # Check trend condition: HEATING or COOLING, sufficient history
-                     if momentum in ["HEATING", "COOLING"] and months_count >= 6 and pr3 >= 300:
-                         is_flat = False
-                     
-                     if is_flat:
-                         six_mo = rr * 6
-                         st.markdown(f"**NO ADVANCE FORECAST (FLAT):** ~${rr:,.0f}/mo | **6MO:** ~${six_mo:,.0f}")
-                     else:
-                         # Trend
-                         monthly_r = (1 + growth_ratio) ** (1/3) - 1
-                         # Clamp
-                         monthly_r = max(-0.10, min(0.10, monthly_r))
-                         
-                         # Geometric sum loop for 6 months
-                         six_mo = 0
-                         current_monthly = rr
-                         for _ in range(6):
-                             current_monthly *= (1 + monthly_r)
-                             six_mo += current_monthly
-                         
-                         st.markdown(f"**NO ADVANCE FORECAST (TREND):** ~${rr:,.0f}/mo | **6MO:** ~${six_mo:,.0f}")
-
+                    # Determine Mode
+                    forecast_mode = "FLAT"
+                    if na_mom in ["HEATING", "COOLING"]:
+                         # Trend Check: Need 6mo data and meaningful PR3
+                         if na_months >= 6 and (na_pr3 >= 300):
+                             forecast_mode = "TREND"
+                    
+                    six_mo_total = 0.0
+                    
+                    if forecast_mode == "FLAT":
+                        six_mo_total = na_rr * 6
+                        st.markdown(f"**NO ADVANCE FORECAST (FLAT): ~${na_rr:,.0f}/mo | 6MO: ~${six_mo_total:,.0f}**")
+                        
+                    elif forecast_mode == "TREND":
+                        # Compute implied monthly rate from 3-mo Growth
+                        # growth_pct is (TR3 - PR3)/PR3. TR3 = PR3 * (1+g)
+                        # We want (1+r)^3 = TR3/PR3 = (1+g)
+                        denom = max(na_pr3, 300)
+                        growth_ratio = (na_tr3 - na_pr3) / denom
+                        
+                        # r = (1 + G)^(1/3) - 1
+                        try:
+                            monthly_r = math.pow(1 + growth_ratio, 1/3) - 1
+                        except:
+                            monthly_r = 0.0
+                        
+                        # Clamp
+                        monthly_r = max(-0.10, min(0.10, monthly_r))
+                        
+                        # Geo Sum: RR * sum((1+r)^k) for k=1..6
+                        geom_sum = 0.0
+                        current_factor = 1.0
+                        for _ in range(6):
+                            current_factor *= (1 + monthly_r)
+                            geom_sum += current_factor
+                            
+                        six_mo_total = na_rr * geom_sum
+                        
+                        st.markdown(f"**NO ADVANCE FORECAST (TREND): ~${na_rr:,.0f}/mo | 6MO: ~${six_mo_total:,.0f}**")
+                        
             elif is_recouped:
                 elapsed = deal_row.get('Elapsed Months', 0)
                 
