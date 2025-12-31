@@ -181,7 +181,7 @@ st.markdown("""
         display: inline-block;
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
-        animation: ticker 120s linear infinite; 
+        animation: ticker 20s linear infinite; 
         will-change: transform;
         transform: translate3d(0, 0, 0);
         backface-visibility: hidden;
