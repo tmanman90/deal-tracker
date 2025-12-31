@@ -181,7 +181,7 @@ st.markdown("""
         display: inline-block;
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
-        animation: ticker 20s linear infinite; 
+        animation: ticker 160s linear infinite; 
         will-change: transform;
         transform: translate3d(0, 0, 0);
         backface-visibility: hidden;
@@ -1265,10 +1265,27 @@ def show_portfolio(df_dash, df_act, current_date_override):
     elif sort_opt == "Delta Months":
          sort_col = "Delta Months"
 
+    # --- NEW SORT LOGIC WITH TIE-BREAKER ---
     if sort_col and sort_col in filtered.columns:
+        # 1. Ensure Cum Receipts exists and is numeric for the tie-breaker
+        if "Cum Receipts" not in filtered.columns:
+             filtered["Cum Receipts"] = 0.0
+        filtered["Cum Receipts"] = pd.to_numeric(filtered["Cum Receipts"], errors="coerce").fillna(0)
+
+        # 2. Ensure specific sort columns are numeric if needed
         if sort_col == "Delta Months":
              filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
-        filtered = filtered.sort_values(by=sort_col, ascending=ascending)
+             
+        # 3. Apply Multi-Column Sort
+        if sort_opt == "Grade":
+            # Primary: Grade_Rank (ASC), Tie-breaker: Cum Receipts (DESC)
+            filtered = filtered.sort_values(by=["Grade_Rank", "Cum Receipts"], ascending=[True, False])
+        elif sort_col != "Cum Receipts":
+            # Primary: User Selection (ASC/DESC), Tie-breaker: Cum Receipts (DESC)
+            filtered = filtered.sort_values(by=[sort_col, "Cum Receipts"], ascending=[ascending, False])
+        else:
+            # User selected Cum Receipts - just sort by that
+            filtered = filtered.sort_values(by="Cum Receipts", ascending=False)
 
     # --- KPI CARDS ---
     
@@ -2232,7 +2249,10 @@ def show_detail(df_dash, df_act, deal_id):
             if is_recouped:
                 # NEW RE-UP LOGIC: Range-based
                 def floor_to(x, base=500):
-                     return base * math.floor(x / base)
+                     # Use int() to avoid math dependency if import was lost
+                     # Assuming x is positive
+                     if x < 0: return 0
+                     return base * int(x / base)
 
                 rec_vel = deal_row.get('Recent Velocity', 0)
                 
