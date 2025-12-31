@@ -1245,14 +1245,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
     if tag_filter and 'Tags List' in filtered.columns:
         # keep rows where ANY selected tag is in Tags List
         filtered = filtered[filtered['Tags List'].apply(lambda x: any(t in x for t in tag_filter))]
+        
     # Sort Logic
     ascending = False
     sort_col = None
-    
-    # ENSURE TIE-BREAKER COLUMN EXISTS AND IS NUMERIC
-    if "Cum Receipts" not in filtered.columns:
-        filtered["Cum Receipts"] = 0.0
-    filtered["Cum Receipts"] = pd.to_numeric(filtered["Cum Receipts"], errors="coerce").fillna(0)
     
     if sort_opt == "Remaining to BE":
         sort_col = "Remaining to BE"
@@ -1269,21 +1265,28 @@ def show_portfolio(df_dash, df_act, current_date_override):
     elif sort_opt == "Delta Months":
          sort_col = "Delta Months"
 
-    if sort_col and sort_col in filtered.columns:
-        # Special numeric handling for Delta Months (keep existing behavior)
-        if sort_col == "Delta Months":
+    # --- NEW SORT LOGIC WITH TIE-BREAKER ---
+    if sort_col:
+        # 1. Ensure Cum Receipts exists and is numeric for the tie-breaker
+        if "Cum Receipts" not in filtered.columns:
+             filtered["Cum Receipts"] = 0.0
+        filtered["Cum Receipts"] = pd.to_numeric(filtered["Cum Receipts"], errors="coerce").fillna(0)
+
+        # 2. Ensure specific sort columns are numeric if needed
+        if sort_col == "Delta Months" and sort_col in filtered.columns:
              filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
-        
-        # IMPLEMENT NEW MULTI-COLUMN SORT LOGIC
-        if sort_opt == "Grade":
-             # Grade Rank Ascending (Best First), Tie-Breaker: High Receipts First
-             filtered = filtered.sort_values(by=["Grade_Rank", "Cum Receipts"], ascending=[True, False])
-        elif sort_col == "Cum Receipts":
-             # Explicit Sort by Receipts Descending (no tie breaker needed)
-             filtered = filtered.sort_values(by="Cum Receipts", ascending=False)
-        else:
-             # Primary Sort Key, Tie-Breaker: High Receipts First
-             filtered = filtered.sort_values(by=[sort_col, "Cum Receipts"], ascending=[ascending, False])        
+             
+        # 3. Apply Multi-Column Sort
+        if sort_col in filtered.columns:
+            if sort_opt == "Grade":
+                # Primary: Grade Rank (ASC), Tie-breaker: Cum Receipts (DESC)
+                filtered = filtered.sort_values(by=["Grade_Rank", "Cum Receipts"], ascending=[True, False])
+            elif sort_col != "Cum Receipts":
+                # Primary: User Selection (ASC/DESC), Tie-breaker: Cum Receipts (DESC)
+                filtered = filtered.sort_values(by=[sort_col, "Cum Receipts"], ascending=[ascending, False])
+            else:
+                # User selected Cum Receipts - just sort by that
+                filtered = filtered.sort_values(by="Cum Receipts", ascending=False)
 
     # --- KPI CARDS ---
     
