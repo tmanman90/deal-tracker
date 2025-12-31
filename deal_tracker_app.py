@@ -922,7 +922,9 @@ def process_data(df_dash, df_act, df_deals):
                      'IsPrinterEligible': is_printer,
                      'TrickleDetected': is_trickle,
                      'TrickleReason': trickle_reason,
-                     'Momentum': momentum
+                     'Momentum': momentum,
+                     'PR3': pr3_total,                # Storing for Pace Analysis
+                     'TR3': tr3_total                 # Storing for Pace Analysis
                  }
     
     # --- NEW RECOUPMENT MAP LOGIC ---
@@ -1005,6 +1007,8 @@ def process_data(df_dash, df_act, df_deals):
     pm_trickle = []
     pm_trickle_reason = []
     pm_momentum = []
+    pm_pr3 = []
+    pm_tr3 = []
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -1022,7 +1026,7 @@ def process_data(df_dash, df_act, df_deals):
         pm = printer_metrics.get(did, {
             'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
             'SMA3': 0.0, 'SMA3_RAW': 0.0, 'SMA3_ADJ': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
-            'TrickleDetected': False, 'TrickleReason': '', 'Momentum': 'N/A'
+            'TrickleDetected': False, 'TrickleReason': '', 'Momentum': 'N/A', 'PR3': 0.0, 'TR3': 0.0
         })
         
         pm_months_count.append(pm['MonthsCount'])
@@ -1037,6 +1041,8 @@ def process_data(df_dash, df_act, df_deals):
         pm_trickle.append(pm['TrickleDetected'])
         pm_trickle_reason.append(pm['TrickleReason'])
         pm_momentum.append(pm.get('Momentum', 'N/A'))
+        pm_pr3.append(pm.get('PR3', 0.0))
+        pm_tr3.append(pm.get('TR3', 0.0))
         
         # Determine specific "Today" for this deal
         # If recouped, freeze time at recoupment date
@@ -1128,6 +1134,8 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['TrickleDetected'] = pm_trickle
     df_dash['TrickleReason'] = pm_trickle_reason
     df_dash['Momentum'] = pm_momentum
+    df_dash['PR3'] = pm_pr3
+    df_dash['TR3'] = pm_tr3
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -1145,16 +1153,31 @@ def process_data(df_dash, df_act, df_deals):
         # Get Basics
         exec_adv = row.get('Executed Advance', 0)
         cum = row.get('Cum Receipts', 0)
+        run_rate = row.get('Recent Velocity', 0)
         
         # Recouped means Cum >= Executed Advance
         is_recouped = (cum >= exec_adv)
         
-        # No Advance logic: cannot be early re-up candidate via standard logic
+        # No Advance logic: Custom Tier calculation
         if row.get('IsNoAdvance', False):
-            tier_list.append("")
+            # Default values for No Adv
             speed_ratio_list.append(0.0)
             accel_ratio_list.append(0.0)
             months_to_be_list.append(0.0)
+            
+            # Tier Logic for No Advance
+            # Requirement: Mature data (>6mo) and decent Run Rate, no Trickle
+            na_tier = ""
+            na_months = row.get('MonthsCount', 0)
+            na_trickle = row.get('TrickleDetected', False)
+            
+            if na_months >= 6 and not na_trickle:
+                if run_rate >= 1000:
+                    na_tier = "GREENLIGHT"
+                elif run_rate >= 750:
+                    na_tier = "WATCHLIST"
+            
+            tier_list.append(na_tier)
             continue
 
         # Default Tier Values
@@ -1175,9 +1198,6 @@ def process_data(df_dash, df_act, df_deals):
                 if tgt_months <= 0: tgt_months = 12.0
             except:
                 tgt_months = 12.0
-                
-            # Run Rate (Velocity)
-            run_rate = row.get('Recent Velocity', 0)
             
             # Months to BE from Today
             if run_rate > 0:
@@ -1496,7 +1516,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
     st.markdown("""
     <div style="display: flex; border-bottom: 2px solid #33ff00; padding-bottom: 5px; margin-bottom: 10px; font-weight: bold; color: #ffbf00;">
         <div style="flex: 3;">ARTIST / PROJECT</div>
-        <div style="flex: 1;">ID</div>
+        <div style="flex: 1.2;">MOMENTUM</div>
         <div style="flex: 1;">STATUS</div>
         <div style="flex: 1;">GRADE</div>
         <div style="flex: 1.2; text-align: right;">LBL CUM</div>
@@ -1520,26 +1540,29 @@ def show_portfolio(df_dash, df_act, current_date_override):
             artist += tags_html
             
         did = row.get('did_norm', 'N/A')
-        did_disp = row.get('Deal ID', 'N/A')
+        # did_disp not needed in column anymore but kept for safety
+        did_disp = row.get('Deal ID', 'N/A') 
         status = row.get('Status', '-')
         
         # EARLY RE-UP PILL (DASHBOARD)
         reup_tier = row.get('Early Reup Tier', '')
         pill_html = render_early_reup_pill(reup_tier)
 
-        # NO ADVANCE PILL (DASHBOARD)
-        is_no_adv = row.get('IsNoAdvance', False)
-        no_adv_html = render_no_advance_pill(is_no_adv)
+        # NO ADVANCE PILL (DASHBOARD) - REMOVED FROM PORTFOLIO AS REQUESTED
+        # is_no_adv = row.get('IsNoAdvance', False)
+        # no_adv_html = render_no_advance_pill(is_no_adv)
 
-        # MOMENTUM PILL
+        # MOMENTUM PILL - NOW IN COLUMN
         momentum = row.get('Momentum', 'N/A')
-        mom_html = render_momentum_pill(momentum)
+        mom_col_html = render_momentum_pill(momentum)
+        if not mom_col_html:
+             mom_col_html = "—"
 
-        # Combine Pills
-        all_pills = pill_html + no_adv_html + mom_html
+        # Combine Pills - Artist Name Only (Removed Mom and NoAdv)
+        all_pills = pill_html
 
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
-        if is_no_adv:
+        if row.get('IsNoAdvance', False):
             grade = "N/A"
         
         # Updated grade color logic
@@ -1553,7 +1576,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
             grade_color = "#888" # Grey/Default
         
         pct_val = row.get('% to BE Clean', 0)
-        if is_no_adv:
+        if row.get('IsNoAdvance', False):
             pct_str = "N/A"
             pct_color = "#888"
         else:
@@ -1572,12 +1595,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
             lbl_str = f"${float(lbl_val):,.0f}"
             lbl_color = "#b026ff"
         
-        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3, 1, 1, 1, 1.2, 1, 1.5, 1])
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3, 1.2, 1, 1, 1.2, 1, 1.5, 1])
         
         with c1:
             st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}{all_pills}</div>", unsafe_allow_html=True)
         with c2:
-            st.markdown(f"<div style='padding-top: 5px; color: #888;'>{did_disp}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px;'>{mom_col_html}</div>", unsafe_allow_html=True)
         with c3:
             st.markdown(f"<div style='padding-top: 5px;'>{status}</div>", unsafe_allow_html=True)
         with c4:
@@ -2215,6 +2238,11 @@ def show_detail(df_dash, df_act, deal_id):
                 if not row.empty:
                     r = row.iloc[0]
                     art = r.get('Artist / Project', r.get('Artist', 'Unknown'))
+                    
+                    # No Advance Logic for Switcher
+                    if r.get('IsNoAdvance', False):
+                        return f"{art} (N/A)"
+                    
                     grd = r.get('Grade', 'PENDING') if r.get('Is Eligible', False) else 'PENDING'
                     return f"{art} ({grd})"
                 return did
@@ -2363,13 +2391,53 @@ def show_detail(df_dash, df_act, deal_id):
     
     # --- NO ADVANCE OVERRIDE FOR PACE ANALYSIS ---
     if is_no_adv:
-        # Show simple Run Rate and Receipt text
+        # Get No Advance Metrics
         rr_val = deal_row.get('Recent Velocity', 0)
-        st.info("NO ADVANCE DEAL — RECOUPMENT: N/A")
+        tr3 = deal_row.get('TR3', 0)
+        pr3 = deal_row.get('PR3', 0)
         
-        c_alt1, c_alt2 = st.columns(2)
-        c_alt1.metric("RUN RATE", f"${rr_val:,.0f}/mo")
-        c_alt2.metric("LIFETIME CUMULATIVE", f"${cum_val:,.0f}")
+        # Growth
+        growth_denom = max(pr3, 300)
+        growth_pct = (tr3 - pr3) / growth_denom if growth_denom > 0 else 0
+        
+        # Suggested Re-Up Range
+        # floor helper
+        def floor_to(x, base=500):
+            if x < 0: return 0
+            return base * int(x / base)
+
+        high_reup = floor_to(rr_val * 12, 500)
+        low_reup = floor_to(high_reup * 0.7, 500)
+        reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
+        
+        # Tier
+        na_tier = deal_row.get('Early Reup Tier', 'N/A')
+        pill_render_na = render_early_reup_pill(na_tier)
+        
+        # Render Two-Column Layout
+        c_na1, c_na2 = st.columns([1, 2])
+        
+        with c_na1:
+            st.info("NO ADVANCE DEAL")
+            st.metric("GROWTH (TR3 vs PR3)", f"{growth_pct*100:+.1f}%")
+            st.metric("RUN RATE", f"${rr_val:,.0f}/mo")
+            
+        with c_na2:
+            diag_html_na = f"""<div class="diagnostic-box">
+            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
+                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
+                <div style="position: absolute; right: 0; top: -2px;">{pill_render_na}</div>
+            </div>
+            <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{na_tier}</span><br>
+            <span class="diagnostic-label">SUGGESTED RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>
+            <span class="diagnostic-label">TR3 (Recent 3mo):</span> <span class="diagnostic-value">${tr3:,.0f}</span><br>
+            <span class="diagnostic-label">PR3 (Prior 3mo):</span> <span class="diagnostic-value">${pr3:,.0f}</span><br>
+            <span class="diagnostic-label">RUN RATE:</span> <span class="diagnostic-value">${rr_val:,.0f}/mo</span>
+            </div>"""
+            st.markdown(diag_html_na, unsafe_allow_html=True)
+            
+        # Tiny Definitions
+        st.caption("TR3 = Trailing 3mo Total | PR3 = Prior 3mo Total")
         
     else:
         # Check for tier to decide layout
