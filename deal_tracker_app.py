@@ -1197,6 +1197,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
         # Ensure eligible_only is clearly defined here
         eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
+        
+        # NEW CHECKBOX: HIDE VINTAGE
+        hide_vintage = st.checkbox("HIDE VINTAGE", value=True)
     
     # Filter Logic
     filtered = df_dash.copy()
@@ -1231,6 +1234,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     if eligible_only:
         filtered = filtered[filtered['Is Eligible'] == True]
+
+    # --- APPLY VINTAGE FILTER ---
+    # Apply before Tag multiselect filter logic
+    if hide_vintage and 'Tags List' in filtered.columns:
+        # Keep rows where 'Vintage' is NOT in the Tags List
+        filtered = filtered[filtered['Tags List'].apply(lambda x: "Vintage" not in x if isinstance(x, list) else True)]
 
     # Apply Tag Filter
     if tag_filter and 'Tags List' in filtered.columns:
