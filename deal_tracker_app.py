@@ -153,18 +153,36 @@ st.markdown("""
         margin-left: 8px;
         vertical-align: middle;
         letter-spacing: 0.5px;
+        border: 1px solid;
     }
     .pill-green {
         background-color: #33ff00;
         color: #000;
-        border: 1px solid #33ff00;
+        border-color: #33ff00;
         box-shadow: 0 0 8px rgba(51, 255, 0, 0.6);
     }
     .pill-amber {
         background-color: #ffbf00;
         color: #000;
-        border: 1px solid #ffbf00;
+        border-color: #ffbf00;
         box-shadow: 0 0 8px rgba(255, 191, 0, 0.6);
+    }
+    .pill-red {
+        background-color: #ff3333;
+        color: #000;
+        border-color: #ff3333;
+        box-shadow: 0 0 8px rgba(255, 51, 51, 0.6);
+    }
+    .pill-blue {
+        background-color: #33ccff;
+        color: #000;
+        border-color: #33ccff;
+        box-shadow: 0 0 8px rgba(51, 204, 255, 0.6);
+    }
+    .pill-gray {
+        background-color: #888888;
+        color: #000;
+        border-color: #888888;
     }
 
     /* TICKER TAPE */
@@ -350,25 +368,55 @@ def render_early_reup_pill(tier):
         return '<span class="pill pill-amber">WATCHLIST</span>'
     return ""
 
+def render_momentum_pill(momentum):
+    """Returns HTML string for the Momentum pill."""
+    if not momentum or momentum == "N/A":
+        return ""
+    
+    # Map label to color
+    if momentum == "HEATING":
+        c_class = "pill-green"
+    elif momentum == "COOLING":
+        c_class = "pill-red"
+    elif momentum == "STEADY":
+        c_class = "pill-blue"
+    elif momentum == "NEW":
+        c_class = "pill-amber"
+    elif momentum == "LOW VLM":
+        c_class = "pill-gray"
+    else:
+        c_class = "pill-gray"
+        
+    return f'<span class="pill {c_class}">{momentum}</span>'
+
+def render_no_advance_pill(is_no_advance):
+    """Returns HTML string for the No Advance pill."""
+    if is_no_advance:
+        return '<span class="pill pill-amber">NO ADVANCE</span>'
+    return ""
+
 def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0):
     """
     Calculates Grade and Pace based on Benchmark.
-    Includes 'Half-Month Mulligan' for the initial period.
-    Handles 'Legacy' deals (missing Analyzer data) by defaulting to Executed Advance + 12 Months.
-    Uses current_date_override (latest data date) as 'today' for month calculation.
     
-    Implements Hybrid Grading:
-    - Blends Cumulative Ratio with Velocity Ratio based on maturity (elapsed months).
-    - Uses a run-rate based projection for Velocity Ratio.
-    
-    Returns (Grade, Pace Ratio, Eligible Boolean, Elapsed Months, Expected Progress, Is_Legacy_Flag, ProjectedRecoupMonths).
+    UPDATED: Handling for NO ADVANCE deals (Executed Advance <= 0).
+    Returns "N/A" grade and 0 pace ratio for no-advance deals to prevent skewing and errors.
     """
+    
+    # --- NO ADVANCE CHECK ---
+    executed_advance_raw = row.get('Executed Advance', 0)
+    executed_advance_val = clean_currency(executed_advance_raw)
+    
+    # If no advance, return N/A immediately
+    if executed_advance_val <= 0:
+        # Grade, Pace Ratio, Eligible, Elapsed, Expected, IsLegacy, ProjRecoup
+        return "N/A", 0.0, False, 0.0, 0.0, False, 0.0
+
     # 1. Eligibility Check (Requires 3 data points)
     if count < 3:
         return "N/A", 0.0, False, 0, 0.0, False, 0.0
     
     # 2. Determine Target Amount & Timeline (Legacy Fallback Logic)
-    
     target_amount = 0.0
     target_months = 12.0 # Default
     is_legacy = False
@@ -401,7 +449,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         # LEGACY MODE
         is_legacy = True
         # Use Executed Advance as the target
-        target_amount = clean_currency(row.get('Executed Advance', 0))
+        target_amount = executed_advance_val
         target_months = 12.0
 
     # 3. Parse Dates
@@ -416,14 +464,13 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
         return "N/A", 0.0, False, 0, 0.0, False, 0.0
         
     # 4. Calculate Elapsed Months vs Benchmark (Whole Months Logic)
-    # Use override date (latest actuals date) if provided, else today
+    # Use override date (latest data date) if provided, else today
     today = current_date_override if current_date_override else pd.Timestamp.now()
     
     if forecast_start > today:
         elapsed_months = 0.0
     else:
         # Whole Month Calculation: (YearDiff * 12) + MonthDiff + 1 (inclusive)
-        # e.g. Dec 2025 - Oct 2025 = (0 * 12) + (12 - 10) + 1 = 3 Months
         month_diff = (today.year - forecast_start.year) * 12 + (today.month - forecast_start.month)
         elapsed_months = float(month_diff + 1)
     
@@ -444,7 +491,7 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     
     # 5. Actual progress (Cumulative)
     # UPDATED: Always use Executed Advance as target amount for actual progress
-    target_amount_for_grading = clean_currency(row.get('Executed Advance', 0))
+    target_amount_for_grading = executed_advance_val
     cum_receipts = clean_currency(row.get('Cum Receipts', 0))
     
     if target_amount_for_grading > 0:
@@ -663,7 +710,7 @@ def process_data(df_dash, df_act, df_deals):
              current_date_override = valid_dates_all['Period End Date'].max()
              
     # Calculate Recent Velocity Map (Last 3 Months Avg per Deal)
-    # AND COMPUTE PRINTER METRICS
+    # AND COMPUTE PRINTER METRICS & MOMENTUM
     velocity_map = {}
     lifetime_map = {} # New map for Lifetime Average
     
@@ -793,6 +840,75 @@ def process_data(df_dash, df_act, df_deals):
                  # Printer Eligibility
                  # (MonthsCount >= 4) AND (SMA3 >= 500)
                  is_printer = (months_count >= 4) and (sma3_effective >= 500)
+
+                 # --- MOMENTUM LOGIC (NEW) ---
+                 momentum = "N/A"
+                 
+                 # A) Build a 6-month window (filling zeros)
+                 # Get max date for this deal
+                 max_date = group['Period End Date'].max()
+                 # Use pandas to generate the last 6 expected month-ends ending at/before max_date
+                 # We'll normalize the group data to month-end for robust merging
+                 group['ME_Date'] = group['Period End Date'] + pd.offsets.MonthEnd(0)
+                 max_me = group['ME_Date'].max()
+                 
+                 dates_idx = pd.date_range(end=max_me, periods=6, freq='M')
+                 
+                 # Aggregate receipts by ME_Date (in case duplicates exist, though unlikely)
+                 monthly_sums = group.groupby('ME_Date')['Net Receipts'].sum()
+                 
+                 # Reindex to fill missing months with 0
+                 last6_series = monthly_sums.reindex(dates_idx, fill_value=0)
+                 last6_values = last6_series.values # numpy array of length 6
+                 
+                 # Compute Halves
+                 pr3_total = sum(last6_values[0:3]) # Older half (Months 1-3 of window)
+                 tr3_total = sum(last6_values[3:6]) # Recent half (Months 4-6 of window)
+                 
+                 # Growth Ratio
+                 growth_ratio = (tr3_total - pr3_total) / max(pr3_total, 300.0)
+                 
+                 # B) Run Rate is already computed as `run_rate` above
+                 
+                 # C) Trickle Protection (Blocks HEATING)
+                 is_trickle_blocked = (is_trickle and months_count <= 4)
+                 
+                 # Determine Momentum Label
+                 if months_count < 4:
+                     # D) NEW
+                     momentum = "NEW"
+                 elif is_trickle_blocked:
+                      # C) Force NEW if trickle blocked
+                      momentum = "NEW"
+                 else:
+                     # E) LOW VLM OVERRIDE
+                     if run_rate < 200 and tr3_total < 600:
+                         momentum = "LOW VLM"
+                     else:
+                         # F) Mature Deal Trend (6+ months)
+                         if months_count >= 6:
+                             if pr3_total > 0:
+                                 if growth_ratio >= 0.25:
+                                     momentum = "HEATING"
+                                 elif growth_ratio <= -0.20:
+                                     momentum = "COOLING"
+                                 else:
+                                     momentum = "STEADY"
+                             else:
+                                 # If older half was 0 but recent half > 0 -> Heating (technically Newish behavior but count >=6)
+                                 # Fallback to Steady if both 0
+                                 if tr3_total > 0:
+                                     momentum = "HEATING"
+                                 else:
+                                     momentum = "STEADY"
+                         
+                         # G) Early-but-enough-data (4-5 months)
+                         elif 4 <= months_count < 6:
+                             # Logic: High run rate + No trickle -> HEATING, else STEADY
+                             if run_rate >= 500 and not is_trickle:
+                                 momentum = "HEATING"
+                             else:
+                                 momentum = "STEADY"
                  
                  printer_metrics[did] = {
                      'MonthsCount': months_count,
@@ -805,7 +921,8 @@ def process_data(df_dash, df_act, df_deals):
                      'MoM_pct': mom_pct,
                      'IsPrinterEligible': is_printer,
                      'TrickleDetected': is_trickle,
-                     'TrickleReason': trickle_reason
+                     'TrickleReason': trickle_reason,
+                     'Momentum': momentum
                  }
     
     # --- NEW RECOUPMENT MAP LOGIC ---
@@ -837,6 +954,10 @@ def process_data(df_dash, df_act, df_deals):
         else:
             df_dash[col] = 0.0
             
+    # --- NO ADVANCE PILL LOGIC ---
+    # Identify deals with No Advance (<=0)
+    df_dash['IsNoAdvance'] = df_dash['Executed Advance'] <= 0
+
     # --- COMPUTE LBL CUM ($) ---
     # LBL Cum = Cum Receipts * Label Share Pct
     # Do this AFTER 'Cum Receipts' is guaranteed numeric (clean_currency above)
@@ -883,6 +1004,7 @@ def process_data(df_dash, df_act, df_deals):
     pm_eligible = []
     pm_trickle = []
     pm_trickle_reason = []
+    pm_momentum = []
     
     for _, row in df_dash.iterrows():
         did = str(row.get('Deal ID', ''))
@@ -900,7 +1022,7 @@ def process_data(df_dash, df_act, df_deals):
         pm = printer_metrics.get(did, {
             'MonthsCount': 0, 'LastMonth': 0.0, 'PrevMonth': 0.0, 
             'SMA3': 0.0, 'SMA3_RAW': 0.0, 'SMA3_ADJ': 0.0, 'PrinterScore': 0.0, 'MoM_pct': 0.0, 'IsPrinterEligible': False,
-            'TrickleDetected': False, 'TrickleReason': ''
+            'TrickleDetected': False, 'TrickleReason': '', 'Momentum': 'N/A'
         })
         
         pm_months_count.append(pm['MonthsCount'])
@@ -914,6 +1036,7 @@ def process_data(df_dash, df_act, df_deals):
         pm_eligible.append(pm['IsPrinterEligible'])
         pm_trickle.append(pm['TrickleDetected'])
         pm_trickle_reason.append(pm['TrickleReason'])
+        pm_momentum.append(pm.get('Momentum', 'N/A'))
         
         # Determine specific "Today" for this deal
         # If recouped, freeze time at recoupment date
@@ -962,7 +1085,9 @@ def process_data(df_dash, df_act, df_deals):
         delta_months = proj_rec - T
         
         # 4. Assign Status
-        if is_recouped_status:
+        if row.get('IsNoAdvance', False):
+             s_val = "No Advance"
+        elif is_recouped_status:
             s_val = "Beat"
         elif not e: # Not Eligible
             s_val = "Not Yet"
@@ -1002,6 +1127,7 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['IsPrinterEligible'] = pm_eligible
     df_dash['TrickleDetected'] = pm_trickle
     df_dash['TrickleReason'] = pm_trickle_reason
+    df_dash['Momentum'] = pm_momentum
     
     # UPDATED: Always set Target Amount to Executed Advance for dashboard display
     df_dash['Target Amount'] = df_dash['Executed Advance']
@@ -1023,6 +1149,14 @@ def process_data(df_dash, df_act, df_deals):
         # Recouped means Cum >= Executed Advance
         is_recouped = (cum >= exec_adv)
         
+        # No Advance logic: cannot be early re-up candidate via standard logic
+        if row.get('IsNoAdvance', False):
+            tier_list.append("")
+            speed_ratio_list.append(0.0)
+            accel_ratio_list.append(0.0)
+            months_to_be_list.append(0.0)
+            continue
+
         # Default Tier Values
         tier = ""
         speed_ratio = 0.0
@@ -1090,8 +1224,6 @@ def process_data(df_dash, df_act, df_deals):
                     # Allow high grade without printer score if velocity is high?
                     # Strict rules from prompt: OPTIONAL printer_score >= 0.90
                     # Implies we enforce it if we use it. Let's enforce p_score >= 0.90 as requested for safety.
-                    # But the prompt said "OPTIONAL: printer_score >= 0.90 (OK to include but DO NOT require IsPrinterEligible)"
-                    # I will include it as a condition.
                     
                 # WATCHLIST (Else If)
                 elif (speed_ratio >= 1.15 and 
@@ -1140,7 +1272,15 @@ def show_portfolio(df_dash, df_act, current_date_override):
             pct = row.get('% to BE Clean', 0)
             if pd.isna(pct): pct = 0.0
             
-            item = f"{artist_name} ({row.get('Grade', 'N/A')}) {symbol} {pct*100:.1f}%"
+            grade_display = row.get('Grade', 'N/A')
+            
+            # Show N/A for % if No Advance
+            if row.get('IsNoAdvance', False):
+                pct_str = "N/A"
+            else:
+                pct_str = f"{pct*100:.1f}%"
+            
+            item = f"{artist_name} ({grade_display}) {symbol} {pct_str}"
             ticker_items.append(item)
     
     # Duplicate items for smoother infinite scroll illusion
@@ -1165,7 +1305,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
     with col2:
         # Custom Status Order
-        status_order = ["Beat", "Ahead of Track", "On Track", "Slightly Behind", "Behind", "Not Yet"]
+        status_order = ["Beat", "Ahead of Track", "On Track", "Slightly Behind", "Behind", "Not Yet", "No Advance"]
         
         # Get present statuses and sort by custom order
         raw_status = df_dash['Status'].unique().tolist() if 'Status' in df_dash.columns else []
@@ -1386,8 +1526,21 @@ def show_portfolio(df_dash, df_act, current_date_override):
         # EARLY RE-UP PILL (DASHBOARD)
         reup_tier = row.get('Early Reup Tier', '')
         pill_html = render_early_reup_pill(reup_tier)
-        
+
+        # NO ADVANCE PILL (DASHBOARD)
+        is_no_adv = row.get('IsNoAdvance', False)
+        no_adv_html = render_no_advance_pill(is_no_adv)
+
+        # MOMENTUM PILL
+        momentum = row.get('Momentum', 'N/A')
+        mom_html = render_momentum_pill(momentum)
+
+        # Combine Pills
+        all_pills = pill_html + no_adv_html + mom_html
+
         grade = row.get('Grade', 'WAITING') if row.get('Is Eligible', False) else "PENDING"
+        if is_no_adv:
+            grade = "N/A"
         
         # Updated grade color logic
         if grade in ["A++", "A+", "A", "B+"]:
@@ -1400,7 +1553,12 @@ def show_portfolio(df_dash, df_act, current_date_override):
             grade_color = "#888" # Grey/Default
         
         pct_val = row.get('% to BE Clean', 0)
-        pct_str = f"{pct_val*100:.1f}%"
+        if is_no_adv:
+            pct_str = "N/A"
+            pct_color = "#888"
+        else:
+            pct_str = f"{pct_val*100:.1f}%"
+            pct_color = "#33ff00"
         
         rem_val = row.get('Remaining to BE', 0)
         rem_str = f"${rem_val:,.0f}" if isinstance(rem_val, (int, float)) else str(rem_val)
@@ -1417,7 +1575,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3, 1, 1, 1, 1.2, 1, 1.5, 1])
         
         with c1:
-            st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}{pill_html}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px; font-weight: bold; color: #e6ffff;'>{artist}{all_pills}</div>", unsafe_allow_html=True)
         with c2:
             st.markdown(f"<div style='padding-top: 5px; color: #888;'>{did_disp}</div>", unsafe_allow_html=True)
         with c3:
@@ -1427,7 +1585,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
         with c5:
             st.markdown(f"<div style='padding-top: 5px; text-align: right; color: {lbl_color}; font-weight: bold;'>{lbl_str}</div>", unsafe_allow_html=True)
         with c6:
-            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #33ff00;'>{pct_str}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='padding-top: 5px; text-align: right; color: {pct_color};'>{pct_str}</div>", unsafe_allow_html=True)
         with c7:
             st.markdown(f"<div style='padding-top: 5px; text-align: right; color: #ffbf00;'>{rem_str}</div>", unsafe_allow_html=True)
         with c8:
@@ -2088,16 +2246,26 @@ def show_detail(df_dash, df_act, deal_id):
     for t in tags_list:
         tags_html += f' <span style="font-size: 0.6em; border: 1px solid #33ff00; padding: 4px 10px; margin-left: 15px; border-radius: 4px; color: #33ff00; vertical-align: middle;">{t}</span>'
 
-    # --- EARLY RE-UP PILL IN TITLE ---
+    # --- PILLS IN TITLE ---
     reup_tier = deal_row.get('Early Reup Tier', '')
-    pill_html = render_early_reup_pill(reup_tier)
+    reup_pill = render_early_reup_pill(reup_tier)
+    
+    is_no_adv = deal_row.get('IsNoAdvance', False)
+    no_adv_pill = render_no_advance_pill(is_no_adv)
+    
+    momentum = deal_row.get('Momentum', 'N/A')
+    mom_pill = render_momentum_pill(momentum)
+    
+    all_pills = reup_pill + no_adv_pill + mom_pill
 
     # Render Title with Tag
-    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html} {pill_html}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html} {all_pills}</h1>", unsafe_allow_html=True)
     
     # --- HEADER STATS ---
     row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
     grade_display = deal_row['Grade'] if deal_row['Is Eligible'] else "PENDING"
+    if is_no_adv: grade_display = "N/A"
+    
     status_val = deal_row.get('Status', '-')
     
     # Ensure values are clean
@@ -2122,12 +2290,18 @@ def show_detail(df_dash, df_act, deal_id):
     row1_c1.metric("STATUS", status_val)
     row1_c2.metric("PERFORMANCE GRADE", grade_display, delta_color="normal")
     row1_c3.metric("EXECUTED ADVANCE", f"${adv_val:,.0f}")
-    row1_c4.metric("% RECOUPED", f"{pct_val:.1f}%")
+    
+    if is_no_adv:
+        row1_c4.metric("% RECOUPED", "N/A")
+    else:
+        row1_c4.metric("% RECOUPED", f"{pct_val:.1f}%")
 
     row2_c1, row2_c2, row2_c3, row2_c4 = st.columns(4)
     row2_c1.metric("CUM RECEIPTS", f"${cum_val:,.0f}")
     
-    if is_recouped:
+    if is_no_adv:
+        row2_c2.metric("REMAINING", "N/A")
+    elif is_recouped:
         profit = cum_val - adv_val
         st.markdown("""
         <style>
@@ -2141,7 +2315,11 @@ def show_detail(df_dash, df_act, deal_id):
         row2_c2.metric("REMAINING", f"${rem_val:,.0f}")
         
     row2_c3.metric("FORECAST START", start_date_str)
-    row2_c4.metric("EST BREAKEVEN", be_date_str)
+    
+    if is_no_adv:
+        row2_c4.metric("EST BREAKEVEN", "N/A")
+    else:
+        row2_c4.metric("EST BREAKEVEN", be_date_str)
 
     # --- B) LABEL KPI ROW (ALWAYS VISIBLE) ---
     row3_c1, row3_c2, row3_c3, row3_c4 = st.columns(4)
@@ -2183,151 +2361,162 @@ def show_detail(df_dash, df_act, deal_id):
     # --- PACE BLOCK ---
     st.markdown("### > PACE ANALYSIS")
     
-    # Check for tier to decide layout
-    t_tier = deal_row.get('Early Reup Tier', '')
-    
-    # Render layout conditionally
-    if t_tier in ["GREENLIGHT", "WATCHLIST"]:
-        # Show all 3
-        col_gauge, col_stats, col_early_reup = st.columns([1, 1, 1])
+    # --- NO ADVANCE OVERRIDE FOR PACE ANALYSIS ---
+    if is_no_adv:
+        # Show simple Run Rate and Receipt text
+        rr_val = deal_row.get('Recent Velocity', 0)
+        st.info("NO ADVANCE DEAL — RECOUPMENT: N/A")
+        
+        c_alt1, c_alt2 = st.columns(2)
+        c_alt1.metric("RUN RATE", f"${rr_val:,.0f}/mo")
+        c_alt2.metric("LIFETIME CUMULATIVE", f"${cum_val:,.0f}")
+        
     else:
-        # Show only 2
-        col_gauge, col_stats = st.columns([1, 2])
-        col_early_reup = None # Will not be used
+        # Check for tier to decide layout
+        t_tier = deal_row.get('Early Reup Tier', '')
+        
+        # Render layout conditionally
+        if t_tier in ["GREENLIGHT", "WATCHLIST"]:
+            # Show all 3
+            col_gauge, col_stats, col_early_reup = st.columns([1, 1, 1])
+        else:
+            # Show only 2
+            col_gauge, col_stats = st.columns([1, 2])
+            col_early_reup = None # Will not be used
+        
+        with col_gauge:
+            actual_recoup = deal_row.get('% to BE Clean', 0)
+            expected_recoup = deal_row.get('Expected Recoupment', 0)
+            pace_ratio = deal_row.get('Pace Ratio', 0)
+            
+            chart_val = min(1.0, max(0.0, actual_recoup))
+            
+            if pace_ratio < 0.60:
+                bar_color = 'red' 
+            elif pace_ratio < 0.90:
+                bar_color = 'orange' 
+            else:
+                bar_color = '#33ff00' 
+                
+            gauge_df = pd.DataFrame({
+                'val': [chart_val], 
+                'label': ['Recoupment'], 
+                'color': [bar_color],
+                'Recoupment': [f"{actual_recoup*100:.1f}%"],
+                'Forecast': [f"{expected_recoup*100:.1f}%"]
+            })
+            
+            gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
+                x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
+                color=alt.Color('color', scale=None, legend=None),
+                tooltip=['label', 'Recoupment', 'Forecast']
+            ).properties(height=80, title="RECOUPMENT METER")
+            
+            rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
+            st.altair_chart(gauge + rule, use_container_width=True)
+            
+        with col_stats:
+            if deal_row.get('Is Eligible', False):
+                elapsed = deal_row.get('Elapsed Months', 0)
+                recoup_pct = deal_row.get('% to BE Clean', 0) * 100
+                expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
+                is_legacy = deal_row.get('Is Legacy', False)
+                tag_val = str(deal_row.get('Tags', '')).upper()
+                
+                if elapsed <= 4.5:
+                     note = "(Curved for ramp-up)"
+                else:
+                     note = "(Linear)"
+                
+                legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
+                
+                # Artist Type Line
+                artist_type_line = ""
+                if tag_val:
+                    artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
+                
+                if is_recouped:
+                    # NEW RE-UP LOGIC: Range-based
+                    def floor_to(x, base=500):
+                         # Use int() to avoid math dependency if import was lost
+                         # Assuming x is positive
+                         if x < 0: return 0
+                         return base * int(x / base)
     
-    with col_gauge:
-        actual_recoup = deal_row.get('% to BE Clean', 0)
-        expected_recoup = deal_row.get('Expected Recoupment', 0)
-        pace_ratio = deal_row.get('Pace Ratio', 0)
-        
-        chart_val = min(1.0, max(0.0, actual_recoup))
-        
-        if pace_ratio < 0.60:
-            bar_color = 'red' 
-        elif pace_ratio < 0.90:
-            bar_color = 'orange' 
-        else:
-            bar_color = '#33ff00' 
-            
-        gauge_df = pd.DataFrame({
-            'val': [chart_val], 
-            'label': ['Recoupment'], 
-            'color': [bar_color],
-            'Recoupment': [f"{actual_recoup*100:.1f}%"],
-            'Forecast': [f"{expected_recoup*100:.1f}%"]
-        })
-        
-        gauge = alt.Chart(gauge_df).mark_bar(size=40).encode(
-            x=alt.X('val', scale=alt.Scale(domain=[0, 1.0]), title="Recoupment Progress (0% - 100%)", axis=alt.Axis(format='%')),
-            color=alt.Color('color', scale=None, legend=None),
-            tooltip=['label', 'Recoupment', 'Forecast']
-        ).properties(height=80, title="RECOUPMENT METER")
-        
-        rule = alt.Chart(pd.DataFrame({'x': [expected_recoup]})).mark_rule(color='white', strokeDash=[4, 4], size=3).encode(x='x')
-        st.altair_chart(gauge + rule, use_container_width=True)
-        
-    with col_stats:
-        if deal_row.get('Is Eligible', False):
-            elapsed = deal_row.get('Elapsed Months', 0)
-            recoup_pct = deal_row.get('% to BE Clean', 0) * 100
-            expected_recoup_pct = deal_row.get('Expected Recoupment', 0) * 100 
-            is_legacy = deal_row.get('Is Legacy', False)
-            tag_val = str(deal_row.get('Tags', '')).upper()
-            
-            if elapsed <= 4.5:
-                 note = "(Curved for ramp-up)"
+                    rec_vel = deal_row.get('Recent Velocity', 0)
+                    
+                    # 1. High End: Annualized Run Rate (No trend adjustment)
+                    high_reup_raw = max(0, rec_vel) * 12
+                    
+                    # 2. Low End: Leverage Discount
+                    LEVERAGE_DISCOUNT = 0.70
+                    low_reup_raw = high_reup_raw * LEVERAGE_DISCOUNT
+                    
+                    # 3. Rounding
+                    high_reup = floor_to(high_reup_raw, 500)
+                    low_reup = floor_to(low_reup_raw, 500)
+                    
+                    # 4. Display String
+                    reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
+                    
+                    diag_html = f"""<div class="diagnostic-box">
+    <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+    <span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+    <span class="diagnostic-label">SUGGESTED RE-UP RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>{artist_type_line}{legacy_flag}
+    </div>"""
+                else:
+                    diag_html = f"""<div class="diagnostic-box">
+    <span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
+    <span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
+    <span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
+    <span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
+    </div>"""
+                st.markdown(diag_html, unsafe_allow_html=True)
             else:
-                 note = "(Linear)"
-            
-            legacy_flag = "<br><span style='color: #888; font-size: 0.9rem;'>*Non-Deal Analyzer Forecasting*</span>" if is_legacy else ""
-            
-            # Artist Type Line
-            artist_type_line = ""
-            if tag_val:
-                artist_type_line = f"<br><span class='diagnostic-label'>ARTIST TYPE:</span> <span class='diagnostic-value' style='color: #33ff00;'>{tag_val}</span>"
-            
-            if is_recouped:
-                # NEW RE-UP LOGIC: Range-based
-                def floor_to(x, base=500):
-                     # Use int() to avoid math dependency if import was lost
-                     # Assuming x is positive
-                     if x < 0: return 0
-                     return base * int(x / base)
-
-                rec_vel = deal_row.get('Recent Velocity', 0)
+                count_found = deal_row.get('Data Points Found', 0)
+                st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
+    
+        # Render Early Re-Up Box ONLY if flagged
+        if col_early_reup and t_tier in ["GREENLIGHT", "WATCHLIST"]:
+            with col_early_reup:
+                t_proj = deal_row.get('ProjectedRecoupMonths', 0)
                 
-                # 1. High End: Annualized Run Rate (No trend adjustment)
-                high_reup_raw = max(0, rec_vel) * 12
+                # Target (LBM)
+                try:
+                     lbm = deal_row.get('Label Breakeven Months', 12)
+                     t_lbm = float(str(lbm).replace(',','').strip())
+                     if t_lbm <= 0: t_lbm = 12.0
+                except:
+                     t_lbm = 12.0
+                     
+                t_m_to_be = deal_row.get('Months to BE Today', 999.0)
+                t_run = deal_row.get('Recent Velocity', 0)
+                t_pscore = deal_row.get('PrinterScore', 0)
+                t_accel = deal_row.get('Accel Ratio', 0)
                 
-                # 2. Low End: Leverage Discount
-                LEVERAGE_DISCOUNT = 0.70
-                low_reup_raw = high_reup_raw * LEVERAGE_DISCOUNT
+                # Format Tier Display
+                display_tier = t_tier
+                pill_render = render_early_reup_pill(t_tier)
                 
-                # 3. Rounding
-                high_reup = floor_to(high_reup_raw, 500)
-                low_reup = floor_to(low_reup_raw, 500)
+                # Handle large numbers for display
+                proj_str = f"{t_proj:.1f} mo" if t_proj < 900 else "> 5yr"
+                m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
                 
-                # 4. Display String
-                reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
+                er_html = f"""<div class="diagnostic-box">
+                <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
+                    <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
+                    <div style="position: absolute; right: 0; top: -2px;">{pill_render}</div>
+                </div>
+                <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
+                <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
+                <span class="diagnostic-label">TARGET (LBM):</span> <span class="diagnostic-value">{t_lbm:.0f} mo</span><br>
+                <span class="diagnostic-label">MONTHS TO BE (TODAY):</span> <span class="diagnostic-value">{m_to_be_str}</span><br>
+                <span class="diagnostic-label">RUN RATE:</span> <span class="diagnostic-value">${t_run:,.0f}/mo</span><br>
+                <span class="diagnostic-label">PRINTER SCORE:</span> <span class="diagnostic-value">{t_pscore:.2f}</span><br>
+                <span class="diagnostic-label">ACCELERATION:</span> <span class="diagnostic-value">{t_accel:.2f}x</span>
+                </div>"""
                 
-                diag_html = f"""<div class="diagnostic-box">
-<span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-<span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">SUGGESTED RE-UP RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>{artist_type_line}{legacy_flag}
-</div>"""
-            else:
-                diag_html = f"""<div class="diagnostic-box">
-<span class="diagnostic-label">DEAL AGE:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
-<span class="diagnostic-label">FORECASTED RECOUPMENT:</span> <span class="diagnostic-value">{expected_recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">ACTUAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-<span class="diagnostic-label">PACE RATIO:</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span>{artist_type_line}{legacy_flag}
-</div>"""
-            st.markdown(diag_html, unsafe_allow_html=True)
-        else:
-            count_found = deal_row.get('Data Points Found', 0)
-            st.warning(f"INSUFFICIENT DATA: FOUND {count_found} ACTUALS (NEED 3).")
-
-    # Render Early Re-Up Box ONLY if flagged
-    if col_early_reup and t_tier in ["GREENLIGHT", "WATCHLIST"]:
-        with col_early_reup:
-            t_proj = deal_row.get('ProjectedRecoupMonths', 0)
-            
-            # Target (LBM)
-            try:
-                 lbm = deal_row.get('Label Breakeven Months', 12)
-                 t_lbm = float(str(lbm).replace(',','').strip())
-                 if t_lbm <= 0: t_lbm = 12.0
-            except:
-                 t_lbm = 12.0
-                 
-            t_m_to_be = deal_row.get('Months to BE Today', 999.0)
-            t_run = deal_row.get('Recent Velocity', 0)
-            t_pscore = deal_row.get('PrinterScore', 0)
-            t_accel = deal_row.get('Accel Ratio', 0)
-            
-            # Format Tier Display
-            display_tier = t_tier
-            pill_render = render_early_reup_pill(t_tier)
-            
-            # Handle large numbers for display
-            proj_str = f"{t_proj:.1f} mo" if t_proj < 900 else "> 5yr"
-            m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
-            
-            er_html = f"""<div class="diagnostic-box">
-            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
-                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
-                <div style="position: absolute; right: 0; top: -2px;">{pill_render}</div>
-            </div>
-            <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
-            <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
-            <span class="diagnostic-label">TARGET (LBM):</span> <span class="diagnostic-value">{t_lbm:.0f} mo</span><br>
-            <span class="diagnostic-label">MONTHS TO BE (TODAY):</span> <span class="diagnostic-value">{m_to_be_str}</span><br>
-            <span class="diagnostic-label">RUN RATE:</span> <span class="diagnostic-value">${t_run:,.0f}/mo</span><br>
-            <span class="diagnostic-label">PRINTER SCORE:</span> <span class="diagnostic-value">{t_pscore:.2f}</span><br>
-            <span class="diagnostic-label">ACCELERATION:</span> <span class="diagnostic-value">{t_accel:.2f}x</span>
-            </div>"""
-            
-            st.markdown(er_html, unsafe_allow_html=True)
+                st.markdown(er_html, unsafe_allow_html=True)
 
     # --- CHARTS ---
     st.markdown("### > PERFORMANCE VISUALIZATION")
@@ -2425,6 +2614,10 @@ def show_detail(df_dash, df_act, deal_id):
                 else:
                     st.info("LABEL VIEW UNAVAILABLE: Missing Label Share % for this deal.")
                     render_charts = False
+            
+            # If No Advance, hide forecast line
+            if is_no_adv:
+                show_forecast_line = False
 
             if render_charts:
                 c1, c2 = st.columns(2)
@@ -2460,10 +2653,12 @@ def show_detail(df_dash, df_act, deal_id):
                     else:
                         final_chart = line_actual
 
-                    # Add Advance Line (Always Keep)
-                    rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+                    # Add Advance Line (Always Keep if Adv > 0)
+                    if not is_no_adv:
+                        rule_adv = alt.Chart(pd.DataFrame({'y': [adv_val]})).mark_rule(color='white', strokeDash=[2, 2]).encode(y='y')
+                        final_chart = final_chart + rule_adv
                     
-                    st.altair_chart(final_chart + rule_adv, use_container_width=True)
+                    st.altair_chart(final_chart, use_container_width=True)
                     
                     legend_html = """
                     <div style="text-align: center; font-size: 0.8rem;">
@@ -2481,12 +2676,12 @@ def show_detail(df_dash, df_act, deal_id):
             remaining = rem_val
             
             # --- NEW RECOUPED LOGIC ---
-            if is_recouped:
+            if is_no_adv:
+                st.info("NO ADVANCE DEAL: FORECASTING DISABLED.")
+            elif is_recouped:
                 elapsed = deal_row.get('Elapsed Months', 0)
                 
                 st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
-                
-                # Removed duplicate Re-Up display here as requested
                 
             elif last_rolling > 0:
                 months_to_go = remaining / last_rolling
