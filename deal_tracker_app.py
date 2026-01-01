@@ -1270,6 +1270,26 @@ def process_data(df_dash, df_act, df_deals):
     df_dash['Accel Ratio'] = accel_ratio_list
     df_dash['Months to BE Today'] = months_to_be_list
     
+    # --- FILTER TAGS LIST CREATION (NEW) ---
+    # Create a unified list for filtering that includes manual tags + computed re-up tags
+    filter_tags = []
+    for i, row in df_dash.iterrows():
+        # Start with manual tags
+        ft = list(row.get('Tags List', []))
+        
+        # Add computed tags based on Re-Up Tier
+        tier = row.get('Early Reup Tier', '')
+        if tier == "GREENLIGHT":
+            ft.append("RE-UP WINDOW")
+        elif tier == "WATCHLIST":
+            ft.append("WATCHLIST")
+            
+        # Dedupe and sort
+        ft = sorted(list(set(ft)))
+        filter_tags.append(ft)
+        
+    df_dash['Filter Tags List'] = filter_tags
+    
     return df_dash, df_act, current_date_override
 
 # -----------------------------------------------------------------------------
@@ -1347,8 +1367,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
 
     # TAG FILTER LOGIC
     all_tags = set()
-    if 'Tags List' in df_dash.columns:
-        for tags in df_dash['Tags List']:
+    # Use Filter Tags List (includes computed tags)
+    if 'Filter Tags List' in df_dash.columns:
+        for tags in df_dash['Filter Tags List']:
             all_tags.update(tags)
     all_tags = sorted(list(all_tags))
         
@@ -1408,9 +1429,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
         filtered = filtered[filtered['Tags List'].apply(lambda x: "Vintage" not in x if isinstance(x, list) else True)]
 
     # Apply Tag Filter
-    if tag_filter and 'Tags List' in filtered.columns:
-        # keep rows where ANY selected tag is in Tags List
-        filtered = filtered[filtered['Tags List'].apply(lambda x: any(t in x for t in tag_filter))]
+    if tag_filter and 'Filter Tags List' in filtered.columns:
+        # keep rows where ANY selected tag is in Filter Tags List (Computed + Manual)
+        filtered = filtered[filtered['Filter Tags List'].apply(lambda x: any(t in x for t in tag_filter))]
         
     # Sort Logic
     ascending = False
