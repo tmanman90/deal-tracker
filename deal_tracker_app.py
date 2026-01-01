@@ -179,6 +179,12 @@ st.markdown("""
         border-color: #33ccff;
         box-shadow: 0 0 8px rgba(51, 204, 255, 0.6);
     }
+    .pill-purple {
+        background-color: #b026ff;
+        color: #000;
+        border-color: #b026ff;
+        box-shadow: 0 0 8px rgba(176, 38, 255, 0.6);
+    }
     .pill-gray {
         background-color: #888888;
         color: #000;
@@ -393,6 +399,12 @@ def render_no_advance_pill(is_no_advance):
     """Returns HTML string for the No Advance pill."""
     if is_no_advance:
         return '<span class="pill pill-amber">NO ADVANCE</span>'
+    return ""
+
+def render_jv_pill(is_jv):
+    """Returns HTML string for the JV pill."""
+    if is_jv:
+        return '<span class="pill pill-purple">JV</span>'
     return ""
 
 def calculate_pace_metrics(row, count, current_date_override=None, recent_velocity=0.0, cum_receipts_override=None):
@@ -2390,8 +2402,15 @@ def show_detail(df_dash, df_act, deal_id):
     
     momentum = deal_row.get('Momentum', 'N/A')
     mom_pill = render_momentum_pill(momentum)
+
+    # JV Logic
+    is_jv_clean = deal_row.get('Is JV Clean')
+    if pd.isna(is_jv_clean):
+        raw_jv = str(deal_row.get('Is JV', '')).upper()
+        is_jv_clean = raw_jv in ['TRUE', 'YES', '1']
+    jv_pill = render_jv_pill(is_jv_clean)
     
-    all_pills = reup_pill + no_adv_pill + mom_pill
+    all_pills = reup_pill + no_adv_pill + mom_pill + jv_pill
 
     # Render Title with Tag
     st.markdown(f"<h1 style='display: flex; align-items: center;'>// ANALYZING: {artist_name} [{deal_id}] {tags_html} {all_pills}</h1>", unsafe_allow_html=True)
@@ -2459,6 +2478,9 @@ def show_detail(df_dash, df_act, deal_id):
     # --- B) LABEL KPI ROW (ALWAYS VISIBLE) ---
     row3_c1, row3_c2, row3_c3, row3_c4 = st.columns(4)
     
+    # Prepare Variables
+    rec_vel = deal_row.get('Recent Velocity', 0)
+
     # 1. Label Share Pct
     lbl_pct = deal_row.get('Label Share Pct', np.nan)
     if pd.isna(lbl_pct) or lbl_pct <= 0:
@@ -2473,23 +2495,19 @@ def show_detail(df_dash, df_act, deal_id):
         lbl_cum_str = f"${lbl_cum_val:,.0f}"
         
         # 3. Label Run Rate
-        rec_vel = deal_row.get('Recent Velocity', 0)
         lbl_run_val = rec_vel * lbl_pct
         lbl_run_str = f"${lbl_run_val:,.0f}/mo"
         
-    # 4. JV Status
-    # Prefer Clean computed, fallback to raw
-    is_jv_clean = deal_row.get('Is JV Clean')
-    if pd.isna(is_jv_clean):
-        raw_jv = str(deal_row.get('Is JV', '')).upper()
-        is_jv_clean = raw_jv in ['TRUE', 'YES', '1']
-    
-    jv_str = "YES" if is_jv_clean else "NO"
+    # 4. Full Run Rate (Replacing JV Status)
+    if pd.isna(rec_vel):
+        full_run_str = "N/A"
+    else:
+        full_run_str = f"${rec_vel:,.0f}/mo"
     
     row3_c1.metric("LBL SHR %", lbl_pct_str)
     row3_c2.metric("LBL CUM $", lbl_cum_str)
     row3_c3.metric("LBL RUN $/mo", lbl_run_str)
-    row3_c4.metric("JV YES", jv_str)
+    row3_c4.metric("RUN RATE $/mo", full_run_str)
 
     st.markdown("---")
 
@@ -2955,6 +2973,7 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
+
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
