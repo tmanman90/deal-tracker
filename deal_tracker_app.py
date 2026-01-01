@@ -399,10 +399,8 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     """
     Calculates Grade and Pace based on Benchmark.
     
-    UPDATED: 
-    1. Handling for NO ADVANCE deals (Executed Advance <= 0).
-       Returns "N/A" grade and 0 pace ratio for no-advance deals to prevent skewing and errors.
-    2. Added cum_receipts_override to support freezing receipts for recouped deals.
+    UPDATED: Handling for NO ADVANCE deals (Executed Advance <= 0).
+    Returns "N/A" grade and 0 pace ratio for no-advance deals to prevent skewing and errors.
     """
     
     # --- NO ADVANCE CHECK ---
@@ -495,7 +493,6 @@ def calculate_pace_metrics(row, count, current_date_override=None, recent_veloci
     # UPDATED: Always use Executed Advance as target amount for actual progress
     target_amount_for_grading = executed_advance_val
     
-    # HANDLE RECOUPED OVERRIDE (for freezing grading at recoupment)
     if cum_receipts_override is not None:
         cum_receipts = float(cum_receipts_override)
     else:
@@ -928,11 +925,9 @@ def process_data(df_dash, df_act, df_deals):
                      'TR3': tr3_total                 # Storing for Pace Analysis
                  }
     
-    # --- NEW RECOUPMENT MAP LOGIC (Updated to store CUM at recoup) ---
+    # --- NEW RECOUPMENT MAP LOGIC ---
     # Find the date when cumulative receipts >= executed advance
     recoupment_map = {}
-    recoupment_cum_map = {} # Stores the cumulative amount at the moment of recoupment
-    
     if not df_act.empty and 'Period End Date' in df_act.columns:
         valid_dates_act = df_act.dropna(subset=['Period End Date']).sort_values('Period End Date')
         if not valid_dates_act.empty:
@@ -949,8 +944,11 @@ def process_data(df_dash, df_act, df_deals):
                          # Find first row where Cum >= Exec Adv
                          recouped_rows = deal_txns[deal_txns['Cum'] >= exec_adv]
                          if not recouped_rows.empty:
-                             recoupment_map[did] = recouped_rows.iloc[0]['Period End Date']
-                             recoupment_cum_map[did] = recouped_rows.iloc[0]['Cum']
+                             # Store both date and cumulative amount at recoupment
+                             recoupment_map[did] = {
+                                 'date': recouped_rows.iloc[0]['Period End Date'],
+                                 'cum': recouped_rows.iloc[0]['Cum']
+                             }
 
     # Clean Dashboard Numerics
     numeric_cols = ['Executed Advance', 'Cum Receipts', 'Remaining to BE']
@@ -1049,23 +1047,21 @@ def process_data(df_dash, df_act, df_deals):
         pm_tr3.append(pm.get('TR3', 0.0))
         
         # Determine specific "Today" for this deal
-        # If recouped, freeze time at recoupment date AND freeze receipts for grading
-        recoup_date = recoupment_map.get(did)
-        recoup_cum_val = recoupment_cum_map.get(did) # Only exists if recouped
+        # If recouped, freeze time at recoupment date
+        recoup_info = recoupment_map.get(did)
         
-        if recoup_date:
+        if recoup_info:
+            recoup_date = recoup_info['date']
+            cum_at_recoup = recoup_info['cum']
             deal_calc_date = recoup_date
-            cum_override = recoup_cum_val # Freeze receipts input for grading
         else:
+            recoup_date = None
+            cum_at_recoup = None
             deal_calc_date = current_date_override
-            cum_override = None # Use lifetime/current cumulative
         
         # Now returns 7 values including is_legacy and projected_recoup
         # Pass deal_calc_date to fix "fractional month" / freeze logic
-        # Pass cum_receipts_override to fix "grade inflation" on recouped deals
-        g, r, e, el_m, exp_prog, is_leg, proj_rec = calculate_pace_metrics(
-            row, count, deal_calc_date, recent_velocity=recent_vel, cum_receipts_override=cum_override
-        )
+        g, r, e, el_m, exp_prog, is_leg, proj_rec = calculate_pace_metrics(row, count, deal_calc_date, recent_velocity=recent_vel, cum_receipts_override=cum_at_recoup)
         
         grades.append(g)
         ratios.append(r)
@@ -1482,8 +1478,8 @@ def show_portfolio(df_dash, df_act, current_date_override):
     # Requirement #2: Drop bad/empty Deal IDs immediately
     filtered = filtered[
         filtered['did_norm'].notna() & 
-        (filtered['did_norm'].str.strip() != "") & 
-        (filtered['did_norm'].astype(str).str.lower() != "nan")
+        (filtered['did_norm'] != "") & 
+        (filtered['did_norm'].str.lower() != "nan")
     ]
 
     if search:
@@ -2062,7 +2058,7 @@ def show_portfolio(df_dash, df_act, current_date_override):
                 # Start with all valid deals
                 scanner_universe = df_dash[
                     df_dash['did_norm'].notna() & 
-                    (df_dash['did_norm'].str.strip() != "") & 
+                    (df_dash['did_norm'] != "") & 
                     (df_dash['did_norm'].str.lower() != "nan")
                 ].copy()
                 
@@ -2652,13 +2648,10 @@ def show_detail(df_dash, df_act, deal_id):
                     # 4. Display String
                     reup_range_str = f"${low_reup:,.0f} – ${high_reup:,.0f}"
                     
-                    # Use the corrected pace ratio (as-of recoup) which is now stored in 'Pace Ratio' column
-                    pace_score_asof = deal_row.get('Pace Ratio', 0)
-                    
                     diag_html = f"""<div class="diagnostic-box">
     <span class="diagnostic-label">TIME TO RECOUP:</span> <span class="diagnostic-value">{elapsed:.1f} MONTHS</span><br>
     <span class="diagnostic-label">FINAL RECOUPMENT:</span> <span class="diagnostic-value">{recoup_pct:.1f}%</span><br>
-    <span class="diagnostic-label">PACE SCORE (AS-OF RECOUP):</span> <span class="diagnostic-value">{pace_score_asof:.2f}x</span><br>
+    <span class="diagnostic-label">PACE SCORE (AS-OF RECOUP):</span> <span class="diagnostic-value">{pace_ratio:.2f}x</span><br>
     <span class="diagnostic-label">SUGGESTED RE-UP RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>{artist_type_line}{legacy_flag}
     </div>"""
                 else:
@@ -2962,7 +2955,6 @@ def show_detail(df_dash, df_act, deal_id):
              st.warning("DATA ERROR: ACTUALS FOUND BUT DATES ARE INVALID/MISSING.")
     else:
         st.warning("NO ACTUALS DATA FOUND ON SERVER.")
-
 
 # -----------------------------------------------------------------------------
 # MAIN APP LOOP
