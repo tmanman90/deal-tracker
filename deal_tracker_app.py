@@ -2459,6 +2459,7 @@ def show_detail(df_dash, df_act, deal_id):
             </div>
             <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{na_tier}</span><br>
             <span class="diagnostic-label">SUGGESTED RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{reup_range_str}</span><br>
+            <span class="diagnostic-label">RUN RATE:</span> <span class="diagnostic-value">${rr_val:,.0f}/mo</span><br>
             <span class="diagnostic-label">PRINTER SCORE:</span> <span class="diagnostic-value">{printer_score:.2f}</span><br>
             <span class="diagnostic-label">ACCELERATION:</span> <span class="diagnostic-value">{accel_str}</span>
             </div>"""
