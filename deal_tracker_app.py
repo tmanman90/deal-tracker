@@ -870,9 +870,6 @@ def process_data(df_dash, df_act, df_deals):
                  
                  # B) Run Rate is already computed as `run_rate` above
                  
-                 # C) Trickle Protection: ONLY impacts smoothing/metrics (NOT momentum labels)
-                 # (Trickle detection still feeds sma3_adj / run-rate smoothing above.)
-                 
                  # Determine Momentum Label
                  if months_count < 4:
                      # D) NEW
@@ -901,7 +898,7 @@ def process_data(df_dash, df_act, df_deals):
                          
                          # G) Early-but-enough-data (4-5 months)
                          elif 4 <= months_count < 6:
-                             # Logic: High run rate -> HEATING, else STEADY
+                             # Logic: High run rate -> HEATING (Trickle NO LONGER BLOCKS)
                              if run_rate >= 500:
                                  momentum = "HEATING"
                              else:
@@ -1170,9 +1167,9 @@ def process_data(df_dash, df_act, df_deals):
             
             # Tier Logic for No Advance
             # Requirement: Mature data (>6mo) and decent Run Rate
+            # TRICKLE REMOVED from gating here as well for consistency
             na_tier = ""
             na_months = row.get('MonthsCount', 0)
-            na_trickle = row.get('TrickleDetected', False)
             
             if na_months >= 6:
                 if run_rate >= 1000:
@@ -1228,13 +1225,13 @@ def process_data(df_dash, df_act, df_deals):
                 months_saved = tgt_months - actual_recoup_months
                 
                 # Gates
-                trickle = row.get('TrickleDetected', False)
                 p_score = row.get('PrinterScore', 0)
                 grade = row.get('Grade', 'N/A')
                 months_count = row.get('MonthsCount', 0)
                 is_eligible = row.get('Is Eligible', False)
                 data_sufficient = is_eligible or (months_count >= 3)
                 
+                # TRICKLE REMOVED from gating
                 if data_sufficient:
                     # GREENLIGHT: Meaningfully Fast
                     if (speed_ratio >= 1.35 and 
@@ -1287,7 +1284,6 @@ def process_data(df_dash, df_act, df_deals):
                 
             # Flags
             # is_printer = row.get('IsPrinterEligible', False) # REMOVED HARD REQUIREMENT
-            trickle = row.get('TrickleDetected', False)
             p_score = row.get('PrinterScore', 0)
             grade = row.get('Grade', 'N/A')
             months_count = row.get('MonthsCount', 0)
@@ -1297,6 +1293,7 @@ def process_data(df_dash, df_act, df_deals):
             data_sufficient = is_eligible or (months_count >= 3)
             
             # Tier Logic (Sanity Check Ex: Proj Total 5.0mo, Target 12mo (Speed=2.4), M_to_BE 2.0mo, RR $1023, P_Score 0.92, Grade A -> GREENLIGHT)
+            # TRICKLE REMOVED from gating
             if data_sufficient and run_rate > 0 and proj_total < 900:
                 
                 # GREENLIGHT
