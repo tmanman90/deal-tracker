@@ -1191,67 +1191,6 @@ def process_data(df_dash, df_act, df_deals):
         speed_ratio = 0.0
         accel_ratio = 0.0
         months_to_be_today = 999.0
-        # --- NEW: RECOUPED DEAL ANALYSIS ---
-        # Evaluate Recouped Advance deals conservatively using ACTUALS
-        if is_recouped:
-            # 1. Parse Target Months (Reuse logic)
-            try:
-                lbm = row.get('Label Breakeven Months', 12)
-                tgt_months = float(str(lbm).replace(',','').strip())
-                if tgt_months <= 0: tgt_months = 12.0
-            except:
-                tgt_months = 12.0
-            
-            # 2. Get Actuals
-            # For recouped deals, ProjectedRecoupMonths holds actual elapsed months to recoup
-            actual_recoup_months = row.get('ProjectedRecoupMonths', 999.0)
-            months_to_be_today = 0.0
-            
-            # 3. Speed Ratio
-            if actual_recoup_months > 0:
-                speed_ratio = tgt_months / actual_recoup_months
-            else:
-                speed_ratio = 0.0
-                
-            # 4. Accel Ratio (Compute for display)
-            lifetime = row.get('Lifetime Avg', 0)
-            if lifetime > 0:
-                accel_ratio = run_rate / lifetime
-            else:
-                accel_ratio = 0.0
-                
-            # 5. Evaluate Tier
-            # Eligibility: Valid Actuals AND Beat/Met Estimate (Speed >= 1.0)
-            if (actual_recoup_months > 0 and 
-                actual_recoup_months < 900 and 
-                tgt_months > 0 and 
-                speed_ratio >= 1.0):
-                
-                months_saved = tgt_months - actual_recoup_months
-                
-                # Gates
-                trickle = row.get('TrickleDetected', False)
-                p_score = row.get('PrinterScore', 0)
-                grade = row.get('Grade', 'N/A')
-                months_count = row.get('MonthsCount', 0)
-                is_eligible = row.get('Is Eligible', False)
-                data_sufficient = is_eligible or (months_count >= 3)
-                
-                if data_sufficient and not trickle:
-                    # GREENLIGHT: Meaningfully Fast
-                    if (speed_ratio >= 1.35 and 
-                        months_saved >= 3 and 
-                        run_rate >= 750 and 
-                        grade in ["A", "A+", "A++", "B+"] and 
-                        p_score >= 0.90):
-                        tier = "GREENLIGHT"
-                        
-                    # WATCHLIST: Conservative Recouped
-                    elif (speed_ratio >= 1.0 and
-                          run_rate >= 500 and
-                          grade in ["B", "B+", "A", "A+", "A++"] and
-                          p_score >= 0.85):
-                        tier = "WATCHLIST"
         
         # Only analyze if UNRECOUPED
         if not is_recouped:
