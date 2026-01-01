@@ -1274,19 +1274,27 @@ def process_data(df_dash, df_act, df_deals):
     # Create a unified list for filtering that includes manual tags + computed re-up tags
     filter_tags = []
     for i, row in df_dash.iterrows():
-        # Start with manual tags
-        ft = list(row.get('Tags List', []))
-        
-        # Add computed tags based on Re-Up Tier
-        tier = row.get('Early Reup Tier', '')
+        # Start with manual tags (keep roster badges clean by NOT modifying Tags List)
+        manual = row.get('Tags List', [])
+        ft = list(manual) if isinstance(manual, list) else []
+
+        # Add computed tags based on Early Reup Tier (normalized for stability)
+        tier_raw = row.get('Early Reup Tier', '')
+        tier = str(tier_raw).strip().upper()
         if tier == "GREENLIGHT":
             ft.append("RE-UP WINDOW")
         elif tier == "WATCHLIST":
             ft.append("WATCHLIST")
-            
-        # Dedupe and sort
-        ft = sorted(list(set(ft)))
-        filter_tags.append(ft)
+
+        # Dedupe while keeping deterministic order (manual order first, then computed)
+        seen = set()
+        ft_deduped = []
+        for t in ft:
+            if t and t not in seen:
+                seen.add(t)
+                ft_deduped.append(t)
+
+        filter_tags.append(ft_deduped)
         
     df_dash['Filter Tags List'] = filter_tags
     
@@ -1367,10 +1375,11 @@ def show_portfolio(df_dash, df_act, current_date_override):
 
     # TAG FILTER LOGIC
     all_tags = set()
-    # Use Filter Tags List (includes computed tags)
+    # Use Filter Tags List (includes computed tags) for dropdown options
     if 'Filter Tags List' in df_dash.columns:
         for tags in df_dash['Filter Tags List']:
-            all_tags.update(tags)
+            if isinstance(tags, list):
+                all_tags.update(tags)
     all_tags = sorted(list(all_tags))
         
     with col5:
@@ -1431,7 +1440,9 @@ def show_portfolio(df_dash, df_act, current_date_override):
     # Apply Tag Filter
     if tag_filter and 'Filter Tags List' in filtered.columns:
         # keep rows where ANY selected tag is in Filter Tags List (Computed + Manual)
-        filtered = filtered[filtered['Filter Tags List'].apply(lambda x: any(t in x for t in tag_filter))]
+        filtered = filtered[filtered['Filter Tags List'].apply(
+            lambda x: any(t in x for t in tag_filter) if isinstance(x, list) else False
+        )]
         
     # Sort Logic
     ascending = False
