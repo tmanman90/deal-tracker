@@ -870,16 +870,13 @@ def process_data(df_dash, df_act, df_deals):
                  
                  # B) Run Rate is already computed as `run_rate` above
                  
-                 # C) Trickle Protection (Blocks HEATING)
-                 is_trickle_blocked = (is_trickle and months_count <= 4)
+                 # C) Trickle Protection: ONLY impacts smoothing/metrics (NOT momentum labels)
+                 # (Trickle detection still feeds sma3_adj / run-rate smoothing above.)
                  
                  # Determine Momentum Label
                  if months_count < 4:
                      # D) NEW
                      momentum = "NEW"
-                 elif is_trickle_blocked:
-                      # C) Force NEW if trickle blocked
-                      momentum = "NEW"
                  else:
                      # E) LOW VLM OVERRIDE
                      if run_rate < 200 and tr3_total < 600:
@@ -904,8 +901,8 @@ def process_data(df_dash, df_act, df_deals):
                          
                          # G) Early-but-enough-data (4-5 months)
                          elif 4 <= months_count < 6:
-                             # Logic: High run rate + No trickle -> HEATING, else STEADY
-                             if run_rate >= 500 and not is_trickle:
+                             # Logic: High run rate -> HEATING, else STEADY
+                             if run_rate >= 500:
                                  momentum = "HEATING"
                              else:
                                  momentum = "STEADY"
@@ -1172,12 +1169,12 @@ def process_data(df_dash, df_act, df_deals):
             months_to_be_list.append(0.0)
             
             # Tier Logic for No Advance
-            # Requirement: Mature data (>6mo) and decent Run Rate, no Trickle
+            # Requirement: Mature data (>6mo) and decent Run Rate
             na_tier = ""
             na_months = row.get('MonthsCount', 0)
             na_trickle = row.get('TrickleDetected', False)
             
-            if na_months >= 6 and not na_trickle:
+            if na_months >= 6:
                 if run_rate >= 1000:
                     na_tier = "GREENLIGHT"
                 elif run_rate >= 750:
@@ -1238,7 +1235,7 @@ def process_data(df_dash, df_act, df_deals):
                 is_eligible = row.get('Is Eligible', False)
                 data_sufficient = is_eligible or (months_count >= 3)
                 
-                if data_sufficient and not trickle:
+                if data_sufficient:
                     # GREENLIGHT: Meaningfully Fast
                     if (speed_ratio >= 1.35 and 
                         months_saved >= 3 and 
@@ -1300,7 +1297,7 @@ def process_data(df_dash, df_act, df_deals):
             data_sufficient = is_eligible or (months_count >= 3)
             
             # Tier Logic (Sanity Check Ex: Proj Total 5.0mo, Target 12mo (Speed=2.4), M_to_BE 2.0mo, RR $1023, P_Score 0.92, Grade A -> GREENLIGHT)
-            if data_sufficient and run_rate > 0 and proj_total < 900 and not trickle:
+            if data_sufficient and run_rate > 0 and proj_total < 900:
                 
                 # GREENLIGHT
                 if (speed_ratio >= 1.35 and 
