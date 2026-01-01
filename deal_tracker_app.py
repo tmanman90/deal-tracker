@@ -181,7 +181,7 @@ st.markdown("""
         display: inline-block;
         white-space: nowrap;
         /* Seamless loop: move from 0 to -50% (assuming content is duplicated once) */
-        animation: ticker 200s linear infinite; 
+        animation: ticker 120s linear infinite; 
         will-change: transform;
         transform: translate3d(0, 0, 0);
         backface-visibility: hidden;
@@ -1197,9 +1197,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
         
         # Ensure eligible_only is clearly defined here
         eligible_only = st.checkbox("ELIGIBLE FOR GRADE", value=False)
-        
-        # NEW CHECKBOX: HIDE VINTAGE
-        hide_vintage = st.checkbox("HIDE VINTAGE", value=True)
     
     # Filter Logic
     filtered = df_dash.copy()
@@ -1235,12 +1232,6 @@ def show_portfolio(df_dash, df_act, current_date_override):
     if eligible_only:
         filtered = filtered[filtered['Is Eligible'] == True]
 
-    # --- APPLY VINTAGE FILTER ---
-    # Apply before Tag multiselect filter logic
-    if hide_vintage and 'Tags List' in filtered.columns:
-        # Keep rows where 'Vintage' is NOT in the Tags List
-        filtered = filtered[filtered['Tags List'].apply(lambda x: "Vintage" not in x if isinstance(x, list) else True)]
-
     # Apply Tag Filter
     if tag_filter and 'Tags List' in filtered.columns:
         # keep rows where ANY selected tag is in Tags List
@@ -1265,27 +1256,10 @@ def show_portfolio(df_dash, df_act, current_date_override):
     elif sort_opt == "Delta Months":
          sort_col = "Delta Months"
 
-    # --- NEW SORT LOGIC WITH TIE-BREAKER ---
     if sort_col and sort_col in filtered.columns:
-        # 1. Ensure Cum Receipts exists and is numeric for the tie-breaker
-        if "Cum Receipts" not in filtered.columns:
-             filtered["Cum Receipts"] = 0.0
-        filtered["Cum Receipts"] = pd.to_numeric(filtered["Cum Receipts"], errors="coerce").fillna(0)
-
-        # 2. Ensure specific sort columns are numeric if needed
         if sort_col == "Delta Months":
              filtered['Delta Months'] = pd.to_numeric(filtered['Delta Months'], errors='coerce').fillna(0)
-             
-        # 3. Apply Multi-Column Sort
-        if sort_opt == "Grade":
-            # Primary: Grade_Rank (ASC), Tie-breaker: Cum Receipts (DESC)
-            filtered = filtered.sort_values(by=["Grade_Rank", "Cum Receipts"], ascending=[True, False])
-        elif sort_col != "Cum Receipts":
-            # Primary: User Selection (ASC/DESC), Tie-breaker: Cum Receipts (DESC)
-            filtered = filtered.sort_values(by=[sort_col, "Cum Receipts"], ascending=[ascending, False])
-        else:
-            # User selected Cum Receipts - just sort by that
-            filtered = filtered.sort_values(by="Cum Receipts", ascending=False)
+        filtered = filtered.sort_values(by=sort_col, ascending=ascending)
 
     # --- KPI CARDS ---
     
@@ -2249,10 +2223,7 @@ def show_detail(df_dash, df_act, deal_id):
             if is_recouped:
                 # NEW RE-UP LOGIC: Range-based
                 def floor_to(x, base=500):
-                     # Use int() to avoid math dependency if import was lost
-                     # Assuming x is positive
-                     if x < 0: return 0
-                     return base * int(x / base)
+                     return base * math.floor(x / base)
 
                 rec_vel = deal_row.get('Recent Velocity', 0)
                 
@@ -2314,10 +2285,8 @@ def show_detail(df_dash, df_act, deal_id):
             m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
             
             er_html = f"""<div class="diagnostic-box">
-            <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
-                <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
-                <div style="position: absolute; right: 0; top: -2px;">{pill_render}</div>
-            </div>
+            <div style="margin-bottom: 5px; font-weight: bold; color: #e6ffff; border-bottom: 1px solid #33ff00; padding-bottom: 3px;">EARLY RE-UP WINDOW</div>
+            {pill_render}<br>
             <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
             <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
             <span class="diagnostic-label">TARGET (LBM):</span> <span class="diagnostic-value">{t_lbm:.0f} mo</span><br>
