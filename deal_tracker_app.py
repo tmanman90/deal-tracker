@@ -2596,12 +2596,25 @@ def show_detail(df_dash, df_act, deal_id):
                 proj_str = f"{t_proj:.1f} mo" if t_proj < 900 else "> 5yr"
                 m_to_be_str = f"{t_m_to_be:.1f} mo" if t_m_to_be < 900 else "> 5yr"
                 
+                # --- SUGGESTED RE-UP RANGE LOGIC ---
+                def floor_to_local(x, base=500):
+                    if x < 0: return 0
+                    return base * int(x / base)
+
+                if t_run > 0:
+                    high_reup_er = floor_to_local(t_run * 12, 500)
+                    low_reup_er = floor_to_local(high_reup_er * 0.7, 500)
+                    er_reup_range_str = f"${low_reup_er:,.0f} – ${high_reup_er:,.0f}"
+                else:
+                    er_reup_range_str = "N/A"
+                
                 er_html = f"""<div class="diagnostic-box">
                 <div style="position: relative; border-bottom: 1px solid #33ff00; margin-bottom: 5px; padding-bottom: 3px;">
                     <span style="font-weight: bold; color: #e6ffff; font-size: 1rem;">EARLY RE-UP WINDOW</span>
                     <div style="position: absolute; right: 0; top: -2px;">{pill_render}</div>
                 </div>
                 <span class="diagnostic-label">TIER:</span> <span class="diagnostic-value">{display_tier}</span><br>
+                <span class="diagnostic-label">SUGGESTED RE-UP RANGE:</span> <span class="diagnostic-value" style="color: #ffd700;">{er_reup_range_str}</span><br>
                 <span class="diagnostic-label">PROJECTED BE (TOTAL):</span> <span class="diagnostic-value">{proj_str}</span><br>
                 <span class="diagnostic-label">TARGET (LBM):</span> <span class="diagnostic-value">{t_lbm:.0f} mo</span><br>
                 <span class="diagnostic-label">MONTHS TO BE (TODAY):</span> <span class="diagnostic-value">{m_to_be_str}</span><br>
@@ -2825,7 +2838,13 @@ def show_detail(df_dash, df_act, deal_id):
             elif is_recouped:
                 elapsed = deal_row.get('Elapsed Months', 0)
                 
-                st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS")
+                rr_recouped = deal_row.get('Recent Velocity', 0)
+                if rr_recouped > 0:
+                    rr_suffix = f" | RUN RATE: ~${rr_recouped:,.0f}/mo"
+                else:
+                    rr_suffix = ""
+
+                st.success(f"STATUS: RECOUPED. TARGET ACHIEVED. | AGE AT RECOUPMENT: {elapsed:.1f} MONTHS{rr_suffix}")
                 
             elif last_rolling > 0:
                 months_to_go = remaining / last_rolling
