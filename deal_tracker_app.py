@@ -1191,32 +1191,6 @@ def process_data(df_dash, df_act, df_deals):
         speed_ratio = 0.0
         accel_ratio = 0.0
         months_to_be_today = 999.0
-        
-        # Only analyze if UNRECOUPED
-        if not is_recouped:
-            # Gather metrics
-            rem_to_be = max(exec_adv - cum, 0)
-            
-            # Target Months (LBM)
-            try:
-                lbm = row.get('Label Breakeven Months', 12)
-                tgt_months = float(str(lbm).replace(',','').strip())
-                if tgt_months <= 0: tgt_months = 12.0
-            except:
-                tgt_months = 12.0
-            
-            # Months to BE from Today
-            if run_rate > 0:
-                months_to_be_today = rem_to_be / run_rate
-            else:
-                months_to_be_today = 999.0
-
-        # Default Tier Values
-        tier = ""
-        speed_ratio = 0.0
-        accel_ratio = 0.0
-        months_to_be_today = 999.0
-        
         # --- NEW: RECOUPED DEAL ANALYSIS ---
         # Evaluate Recouped Advance deals conservatively using ACTUALS
         if is_recouped:
@@ -1278,12 +1252,25 @@ def process_data(df_dash, df_act, df_deals):
                           grade in ["B", "B+", "A", "A+", "A++"] and
                           p_score >= 0.85):
                         tier = "WATCHLIST"
-
+        
         # Only analyze if UNRECOUPED
         if not is_recouped:
             # Gather metrics
             rem_to_be = max(exec_adv - cum, 0)
-
+            
+            # Target Months (LBM)
+            try:
+                lbm = row.get('Label Breakeven Months', 12)
+                tgt_months = float(str(lbm).replace(',','').strip())
+                if tgt_months <= 0: tgt_months = 12.0
+            except:
+                tgt_months = 12.0
+            
+            # Months to BE from Today
+            if run_rate > 0:
+                months_to_be_today = rem_to_be / run_rate
+            else:
+                months_to_be_today = 999.0
                 
             # Projected Total Months (from Pace Metrics)
             proj_total = row.get('ProjectedRecoupMonths', 999.0)
